@@ -1,0 +1,22 @@
+# Core Dependencies
+numpy>=1.20.0      # For numerical operations (used across L1, L2, L3)
+tensorflow>=2.8.0  # For Level 1 Agent neural networks (Keras is part of TF 2.x)
+
+# Level 2 Neural Networks (TD3, Modulation MLP)
+# Note: Also required for optional Vector Search
+torch>=1.10.0      # PyTorch framework for L2 NNs
+
+# Optional: LLM Interaction (if LLM_MANUAL_MODE = False)
+# Required to interact with OpenAI or compatible APIs
+openai>=1.0.0      # Official OpenAI library
+tenacity>=8.0.0     # For robust API call retries
+
+# Optional: Memory System Vector Search
+# Requires torch (listed above)
+sentence-transformers>=2.2.0 # For generating text embeddings
+# Choose ONE of the following FAISS packages depending on your system:
+# faiss-cpu>=1.7.4       # For CPU-only vector search
+# faiss-gpu>=1.7.4       # For GPU-accelerated vector search (requires CUDA setup)
+
+# Optional: VM Service Docker Mode (if VM_SERVICE_USE_REAL = True and using Docker)
+docker>=5.0.0        # To interact with the Docker daemon
