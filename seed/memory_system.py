@@ -19,6 +19,7 @@ from collections import deque
 import numpy as np
 import math
 import re
+import pathlib # Added for save_memory directory creation
 from typing import Dict, Any, Optional, List, Union, Deque, Tuple, Callable
 
 # Import config constants (updated for RSIAI Seed)
@@ -356,7 +357,13 @@ class MemorySystem:
                       if simple_data: text_parts.append(json.dumps(simple_data, default=str))
                   except Exception: pass
          elif isinstance(entry_data, str): text_parts.append(entry_data)
-         elif isinstance(entry_data, list): try: list_str = ", ".join(map(str, entry_data)); text_parts.append(f"Sequence: {list_str}"); except Exception: pass
+         # Corrected indentation for try...except block
+         elif isinstance(entry_data, list):
+             try:
+                 list_str = ", ".join(map(str, entry_data))
+                 text_parts.append(f"Sequence: {list_str}")
+             except Exception:
+                 pass # Ignore errors converting list elements
          full_text = ". ".join(filter(None, text_parts)); return full_text[:max_len].strip() # Ensure final truncation
 
     def _get_or_create_embedding(self, lifelong_entry: MemoryEntry) -> Optional[List[float]]:
@@ -635,38 +642,46 @@ class MemorySystem:
         current_category_state = self._learning_parameters[category]
 
         try:
+            param_config = None
+            param_state = None
+            expected_type = None
+            value_key_path = None # e.g., ['value'] or ['sub_param', 'value']
+
             if category == "evaluation_weights": # Nested structure
                 if len(parts) != 3 or parts[2] != 'value': logger.error(f"Invalid parameter name '{name}'. Use format 'evaluation_weights.param_name.value'."); return False
                 param_name = parts[1]
                 if param_name not in default_category_config or param_name not in current_category_state: logger.error(f"Invalid parameter sub-key '{param_name}' for category '{category}'."); return False
 
                 param_config = default_category_config[param_name]
-                param_state = current_category_state[param_name]
+                param_state = current_category_state[param_name] # This dict holds 'value', 'min' etc.
                 expected_type = type(param_config.get('value'))
+                value_key_path = ['value'] # Update 'value' within this sub-dict
 
             else: # Direct structure
                 if len(parts) != 2 or parts[1] != 'value': logger.error(f"Invalid parameter name '{name}'. Use format 'category_name.value'."); return False
-                # param_name = 'value' # The key being updated is 'value'
                 param_config = default_category_config # Top-level config holds min/max/options
                 param_state = current_category_state # Top-level state holds 'value'
                 expected_type = type(param_config.get('value'))
-
+                value_key_path = ['value'] # Update 'value' at this level
 
             # --- Perform Validation and Update ---
             if not isinstance(value, expected_type):
                  logger.error(f"Type mismatch for param '{name}'. Expected {expected_type}, got {type(value)}."); return False
-            # Bounds check
+            # Bounds check (using param_config which points to the dict containing min/max)
             if 'min' in param_config and value < param_config['min']:
                  logger.warning(f"Clamping value for '{name}' to min bound {param_config['min']}. Requested: {value}"); value = param_config['min']
             if 'max' in param_config and value > param_config['max']:
                  logger.warning(f"Clamping value for '{name}' to max bound {param_config['max']}. Requested: {value}"); value = param_config['max']
-            # Options check
+            # Options check (using param_config)
             if 'options' in param_config and value not in param_config['options']:
                  logger.error(f"Invalid option for param '{name}'. Got '{value}', allowed: {param_config['options']}."); return False
 
             # Check if value actually changed before updating and saving
-            if param_state['value'] != value:
-                param_state['value'] = value # Update the 'value' field in the state dict
+            # Access the 'value' correctly using param_state and value_key_path
+            current_value = param_state[value_key_path[0]] # Assumes depth 1 for value path for now
+
+            if current_value != value:
+                param_state[value_key_path[0]] = value # Update the 'value' field in the state dict
                 logger.info(f"Updated learning parameter '{name}' to {value}.")
                 self.save_learning_parameters() # Persist change
             else:
@@ -895,7 +910,6 @@ class MemorySystem:
     def save_memory(self):
         """ Saves memory state (episodic, lifelong, LEARNING STATE) AND forces vector index save. """
         # --- Trigger saves for learning state before main save ---
-        # These use add_lifelong_memory, which handles updates correctly
         self.save_learning_parameters()
         self.save_behavioral_rules()
         # --- End Trigger ---
@@ -903,14 +917,14 @@ class MemorySystem:
         if not self.save_file_path: logger.warning("Memory save_file_path not set. Skipping memory save."); return
         logger.info(f"Saving memory state to {self.save_file_path}...")
         try:
-            # Ensure save directory exists (relative to project root likely)
+            # Ensure save directory exists
             save_dir_path = pathlib.Path(self.save_file_path).parent
             save_dir_path.mkdir(parents=True, exist_ok=True)
 
             # Prepare data to save
             memory_data = {
                 'episodic': list(self._episodic_memory),
-                'lifelong': self._lifelong_memory, # This now includes the learning state keys
+                'lifelong': self._lifelong_memory,
                 'lifelong_keys': list(self._lifelong_keys_by_age),
             }
             # Pickle the data
@@ -919,7 +933,7 @@ class MemorySystem:
 
             # Save vector index if enabled
             if self.vector_search_enabled:
-                self._save_vector_index() # This already forces a batch update
+                self._save_vector_index()
 
         except Exception as e: logger.error(f"Error saving memory state: {e}", exc_info=True)
 
@@ -930,7 +944,7 @@ class MemorySystem:
             # Ensure default learning state is saved if starting fresh
             self.save_learning_parameters()
             self.save_behavioral_rules()
-            if self.vector_search_enabled: self._initialize_vector_index(force_create=False) # Attempt to load index even if memory is new
+            if self.vector_search_enabled: self._initialize_vector_index(force_create=False)
             return
 
         logger.info(f"Loading memory state from {self.save_file_path}...")
@@ -951,17 +965,12 @@ class MemorySystem:
             logger.info(f"Loaded base memory state ({len(self._episodic_memory)} ep, {len(self._lifelong_memory)} ll).")
 
             # --- Load Learning State (AFTER main lifelong dict is loaded) ---
-            # This call handles merging with defaults and validation
             self.load_learning_state()
             # --- End Load Learning State ---
 
             # Initialize or Load Vector Index (and potentially rebuild if needed)
             if self.vector_search_enabled:
                  if not self._initialize_vector_index(force_create=False): logger.warning("Failed to initialize/load vector index after loading memory state. Vector search disabled."); self.vector_search_enabled = False
-                 else:
-                      # Optional: Trigger a rebuild after loading if consistency issues are suspected or if config changed
-                      # self._rebuild_vector_index()
-                      pass
 
         except (EOFError, pickle.UnpicklingError, TypeError, AttributeError) as load_err:
             logger.error(f"Error loading memory file '{self.save_file_path}' ({type(load_err).__name__}). It might be corrupt, empty, or from an incompatible version. Clearing memory.", exc_info=False)

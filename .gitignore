@@ -1,8 +1,22 @@
-
+# Python Virtual Environment
 .venv/
+venv/
+*/__pycache__/
+*.pyc
+*.pyo
 
-__pycache__/
+# Memory State & Backups
+*.pkl
+_core_backups/
+_core_verify_temp*/
 
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Environment variables
 .env
 
-*.log
+# IDE specific folders
+.idea/
+.vscode/

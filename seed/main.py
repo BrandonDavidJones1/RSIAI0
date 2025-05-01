@@ -1,11 +1,11 @@
-# --- START OF FILE main.py ---
+# --- START OF FILE seed/main.py ---
 
-# modular_agi/main.py
+# seed/main.py
 """
-Main entry point for the ModularAGI Orchestrator.
+Main entry point for the RSIAI Seed Orchestrator.
 Initializes components based on configuration and runs the main control loop,
-driving the Upper Level strategic cycle. Includes self-restart mechanism
-and manages persistence of essential state including the lower_level agent pool.
+driving the Seed core strategic cycle. Includes self-restart mechanism
+and manages persistence of essential state.
 """
 import time
 import json
@@ -16,43 +16,45 @@ import pickle       # For restart state serialization
 import copy         # For deep copying state during serialization
 import traceback
 import logging
-# Keep TF import for lower_level agents
+# Keep TF import if still potentially needed elsewhere (e.g. future internal models)
+# If definitely not needed, it can be removed.
 import tensorflow as tf
 from typing import Optional, List, Dict, Any, Callable
 from collections import deque # For loading memory state
 
 # --- Configuration ---
-# Use updated constant names
+# Use relative import now that config.py is in the same package
 from .config import (
     ALIGNMENT_DIRECTIVE, ALIGNMENT_CORE_LOGIC, ALIGNMENT_MISSION,
-    MEMORY_SAVE_FILE, RESTART_SIGNAL_EVENT_TYPE, # Keep restart signal name
-    SEED_INITIAL_GOAL # Use updated goal constant
+    MEMORY_SAVE_FILE, RESTART_SIGNAL_EVENT_TYPE,
+    SEED_INITIAL_GOAL # Use the correct constant name from config.py
 )
 
 # --- Core Components ---
-# Use updated names/paths
+# Use relative imports now that these are in the same package
 from .memory_system import MemorySystem
-# Upper Level (Renamed) Components
-from .upper_level.llm_service import UpperLevel_LLMService
-from .upper_level.vm_service import UpperLevel_VMService
-from .upper_level.evaluator import UpperLevel_SuccessEvaluator
-from .upper_level.sensory import UpperLevel_SensoryRefiner
-from .upper_level.core import UpperLevel_Core # Renamed Upper Level Core class
+from .llm_service import Seed_LLMService     # Corrected path and class name
+from .vm_service import Seed_VMService       # Corrected path and class name
+from .evaluator import Seed_SuccessEvaluator # Corrected path and class name
+from .sensory import Seed_SensoryRefiner     # Corrected path and class name
+from .core import Seed_Core                  # Corrected path and class name
 
 # Setup root logger
+# Note: If you want logging config applied *before* imports,
+# it might need to be handled differently, maybe in __init__.py or a setup script.
+# For now, assuming basicConfig is sufficient here.
 logger = logging.getLogger(__name__)
 
 # --- Constants for Self-Restart Mechanism ---
-# RESTART_SIGNAL_EVENT_TYPE kept from config
 RESTART_STATE_FILE = MEMORY_SAVE_FILE.replace(".pkl", "_restart_state.pkl")
 
 # --- Main Orchestrator Class ---
 # Renamed class
 class Main_Orchestrator:
     """
-    Initializes and coordinates the ModularAGI system. Runs the main execution loop,
-    driving Upper Level strategic cycles, including checks for self-restart.
-    Handles persistence of upper_level state, memory, and the lower_level agent pool.
+    Initializes and coordinates the RSIAI Seed system. Runs the main execution loop,
+    driving Seed Core strategic cycles, including checks for self-restart.
+    Handles persistence of core state and memory.
     """
     def __init__(self, load_restart_state: bool = False):
         """ Initializes all core components and services based on config. """
@@ -62,7 +64,7 @@ class Main_Orchestrator:
         self.is_restarting = load_restart_state # Flag if this is a restart run
 
         # Initialize Memory System (loads standard memory file if it exists)
-        # MemorySystem now handles agent pool state loading internally via load_memory()
+        # MemorySystem now handles its own loading internally via load_memory()
         self.memory: MemorySystem = MemorySystem()
 
         # --- Load Component State if restarting (Memory loaded separately) ---
@@ -78,19 +80,16 @@ class Main_Orchestrator:
                 loaded_state_components = None
         # --- End Component State Loading ---
 
-        # Initialize Upper Level Services & Helper Components
-        # Use updated class names
-        logger.info("Initializing Upper Level Services/Shared Components...")
-        self.llm_service: UpperLevel_LLMService = UpperLevel_LLMService()
-        self.vm_service: UpperLevel_VMService = UpperLevel_VMService()
-        self.success_evaluator: UpperLevel_SuccessEvaluator = UpperLevel_SuccessEvaluator()
-        self.sensory_refiner: UpperLevel_SensoryRefiner = UpperLevel_SensoryRefiner()
+        # Initialize Seed Services & Helper Components
+        logger.info("Initializing Seed Services/Shared Components...")
+        self.llm_service: Seed_LLMService = Seed_LLMService()
+        self.vm_service: Seed_VMService = Seed_VMService()
+        self.success_evaluator: Seed_SuccessEvaluator = Seed_SuccessEvaluator()
+        self.sensory_refiner: Seed_SensoryRefiner = Seed_SensoryRefiner()
 
-        # Initialize Upper Level Core (Strategic decision-maker)
-        # Use updated class name
-        logger.info("Initializing Upper Level Core...")
-        # Renamed internal variable, pass updated component instances
-        self.upper_level_core: UpperLevel_Core = UpperLevel_Core(
+        # Initialize Seed Core (Strategic decision-maker)
+        logger.info("Initializing Seed Core...")
+        self.seed_core: Seed_Core = Seed_Core( # Renamed internal variable
             llm_service=self.llm_service,
             vm_service=self.vm_service,
             memory_system=self.memory,
@@ -103,64 +102,43 @@ class Main_Orchestrator:
         self.is_running: bool = False
         self.start_time: float = 0.0
 
-        # --- Restore Orchestrator/UpperLevel State from Loaded Data (if restarting) ---
-        # Memory and Agent Pool are loaded separately after init
+        # --- Restore Orchestrator/Seed Core State from Loaded Data (if restarting) ---
         if loaded_state_components and isinstance(loaded_state_components, dict):
-            # Restore UpperLevel state (Goal, Base LowerLevel Config)
-            # Use updated state key
-            upper_level_state = loaded_state_components.get('upper_level_state')
-            if upper_level_state and isinstance(upper_level_state, dict):
-                 # Updated log message
-                 logger.info("Restoring UpperLevel state (goal, lower_level config) from loaded data.")
-                 initial_goal = upper_level_state.get('current_goal', {})
-                 # Use updated key name
-                 initial_lower_level_config = upper_level_state.get('lower_level_base_config', {})
+            # Restore Seed Core state (Goal)
+            seed_core_state = loaded_state_components.get('seed_core_state') # Updated state key name
+            if seed_core_state and isinstance(seed_core_state, dict):
+                 logger.info("Restoring Seed Core state (goal) from loaded data.")
+                 initial_goal = seed_core_state.get('current_goal', {})
                  # Use renamed core and method
-                 if hasattr(self.upper_level_core, 'set_initial_state'):
-                      self.upper_level_core.set_initial_state(initial_goal, initial_lower_level_config)
-                 else: # Fallback if method missing
-                      self.upper_level_core.current_goal = initial_goal
-                      self.upper_level_core.lower_level_base_config = initial_lower_level_config
-                      logger.warning("UpperLevel Core lacks set_initial_state method, setting attributes directly.")
+                 if initial_goal: # Only set if goal was found in loaded state
+                     if hasattr(self.seed_core, 'set_initial_state'):
+                          # Set only goal; config loading handled by components now
+                          self.seed_core.set_initial_state(initial_goal)
+                     elif hasattr(self.seed_core, 'current_goal'): # Fallback if method missing/renamed
+                          self.seed_core.current_goal = initial_goal
+                          logger.warning("Seed Core lacks set_initial_state method, setting current_goal attribute directly.")
+                     else:
+                           logger.error("Could not restore goal: Seed Core lacks set_initial_state method and current_goal attribute.")
+                 else:
+                       logger.warning("Restart state file loaded, but missing 'current_goal' in 'seed_core_state'.")
+
 
             # Restore Orchestrator state
             orchestrator_state = loaded_state_components.get('orchestrator_state')
             if orchestrator_state and isinstance(orchestrator_state, dict):
                  self.total_cycles_run = orchestrator_state.get('total_cycles_run', 0)
-                 # Sync cycle count if UpperLevel Core keeps its own internal counter
-                 # Use renamed core
-                 if hasattr(self.upper_level_core, 'cycle_count'):
-                     self.upper_level_core.cycle_count = self.total_cycles_run
+                 # Sync cycle count if Seed Core keeps its own internal counter
+                 if hasattr(self.seed_core, 'cycle_count'):
+                     self.seed_core.cycle_count = self.total_cycles_run
                  logger.info(f"Restored orchestrator cycle count to {self.total_cycles_run}.")
 
-            # Load Lower Level Agent Pool State via UpperLevel Core
-            # Use updated state key
-            agent_pool_state_loaded = loaded_state_components.get('agent_pool_state')
-            if agent_pool_state_loaded is not None:
-                 # Use renamed core and method
-                 if hasattr(self.upper_level_core, 'load_agent_pool_state') and callable(self.upper_level_core.load_agent_pool_state):
-                     # Updated log message
-                     logger.info("Loading LowerLevel Agent Pool state into UpperLevel Core...")
-                     load_success = self.upper_level_core.load_agent_pool_state(agent_pool_state_loaded)
-                     # Updated log message
-                     if load_success: logger.info("LowerLevel Agent Pool state successfully loaded.")
-                     else: logger.error("UpperLevel Core reported failure loading agent pool state.")
-                 else:
-                     # Updated log message
-                     logger.error("Cannot load Agent Pool: UpperLevel Core missing 'load_agent_pool_state' method.")
-            else:
-                 # Updated log message
-                 logger.warning("Restart state file missing 'agent_pool_state'. UpperLevel Core will initialize a new pool if needed.")
-
         init_duration = time.time() - start_time
-        # Updated log message
         logger.info(f"--- Main Orchestrator Initialized ({init_duration:.2f}s) ---")
 
 
     def _check_for_restart_signal(self) -> bool:
-        """ Checks memory for the upper_level restart signal event. """
+        """ Checks memory for the seed restart signal event. """
         try:
-            # Use updated constant name
             restart_signals = self.memory.find_lifelong_by_criteria(
                 lambda e: e.get('key', '').startswith(RESTART_SIGNAL_EVENT_TYPE),
                 limit=1, newest_first=True )
@@ -175,54 +153,33 @@ class Main_Orchestrator:
         logger.info(f"Serializing essential state to restart file: {RESTART_STATE_FILE}")
         state_to_save = {}
         try:
-            # 1. UpperLevel State
-            # Use updated state key and internal var names
-            state_to_save['upper_level_state'] = {
-                'current_goal': copy.deepcopy(self.upper_level_core.current_goal),
-                'lower_level_base_config': copy.deepcopy(self.upper_level_core.lower_level_base_config),
+            # 1. Seed Core State
+            state_to_save['seed_core_state'] = { # Renamed key
+                'current_goal': copy.deepcopy(self.seed_core.current_goal),
             }
 
-            # 2. Memory System State (Core data only, agent pool saved separately)
-            logger.info("Saving core memory data structures for restart...")
-            state_to_save['memory_system_state'] = {
-                 'episodic': list(self.memory._episodic_memory),
-                 'lifelong': self.memory._lifelong_memory,
-                 'lifelong_keys': list(self.memory._lifelong_keys_by_age)
-            }
-
-            # 3. Orchestrator State
+            # 2. Orchestrator State
             state_to_save['orchestrator_state'] = {
                 'total_cycles_run': self.total_cycles_run,
             }
 
-            # 4. Lower Level Agent Pool State
-            # Updated log message
-            logger.info("Requesting LowerLevel Agent Pool state from UpperLevel Core...")
-            # Use renamed core and method
-            if hasattr(self.upper_level_core, 'get_agent_pool_state') and callable(self.upper_level_core.get_agent_pool_state):
-                agent_pool_state = self.upper_level_core.get_agent_pool_state()
-                if agent_pool_state is not None:
-                    # Use updated state key
-                    state_to_save['agent_pool_state'] = agent_pool_state
-                    # Updated log message
-                    logger.info(f"Received LowerLevel Agent Pool state (Type: {type(agent_pool_state)}).")
-                else:
-                    # Updated log message
-                    logger.warning("UpperLevel Core returned None for agent pool state.")
-                    state_to_save['agent_pool_state'] = None
-            else:
-                # Updated log message
-                logger.error("CRITICAL: UpperLevel Core missing 'get_agent_pool_state' method needed for restart!")
-                state_to_save['agent_pool_state'] = None
-
-            # 5. Write to restart state file
+            # 3. Write minimal state to restart state file
             with open(RESTART_STATE_FILE, 'wb') as f:
                 pickle.dump(state_to_save, f, protocol=pickle.HIGHEST_PROTOCOL)
-            logger.info(f"Essential state successfully serialized to {RESTART_STATE_FILE}.")
+            logger.info(f"Minimal restart state (pointers) successfully serialized to {RESTART_STATE_FILE}.")
+
+            # 4. Ensure Full Memory is Saved Before Restart Trigger
+            logger.info("Saving full memory state before triggering restart...")
+            if hasattr(self, 'memory') and self.memory:
+                 self.memory.save_memory() # This saves episodic, lifelong, learning state
+            else:
+                 logger.error("Memory object not available for pre-restart save!")
+                 return False # Abort restart if memory cannot be saved
+
             return True
 
         except Exception as e:
-            logger.critical(f"CRITICAL ERROR: Failed to serialize state for restart: {e}", exc_info=True)
+            logger.critical(f"CRITICAL ERROR: Failed to serialize state or save memory for restart: {e}", exc_info=True)
             if os.path.exists(RESTART_STATE_FILE):
                 try:
                     os.remove(RESTART_STATE_FILE)
@@ -234,18 +191,25 @@ class Main_Orchestrator:
     def _trigger_restart(self):
         """ Triggers the restart of the main script using os.execv. """
         logger.warning("--- TRIGGERING SELF-RESTART NOW ---")
+        # Disconnect services
         if hasattr(self.vm_service, 'disconnect') and callable(self.vm_service.disconnect):
             try: self.vm_service.disconnect(); logger.info("VM Service disconnected pre-restart.")
             except Exception as e: logger.error(f"Error disconnecting VM Service pre-restart: {e}")
 
-        # TF Session clear remains for lower_level agents
-        try:
-            tf.keras.backend.clear_session(); gc.collect();
-            logger.info("TF Session cleared and garbage collected pre-restart.")
-        except Exception as e: logger.error(f"Error during cleanup pre-restart: {e}")
+        # TF Session clear (if still used)
+        if 'tensorflow' in sys.modules:
+            try:
+                tf.keras.backend.clear_session(); gc.collect();
+                logger.info("TF Session cleared and garbage collected pre-restart.")
+            except Exception as e: logger.error(f"Error during TF cleanup pre-restart: {e}")
+        else:
+            gc.collect()
+            logger.info("Garbage collected pre-restart (TF not imported/used).")
+
 
         python_executable = sys.executable
-        entry_module = 'modular_agi.main' # Assuming execution as module
+        # Execute seed.main as the module
+        entry_module = 'seed.main'
         restart_args = [python_executable, '-m', entry_module, '--restarted']
 
         logger.info(f"Executing restart command: {' '.join(restart_args)}")
@@ -256,50 +220,43 @@ class Main_Orchestrator:
 
     # Renamed method
     def _main_loop(self, max_cycles: Optional[int] = None):
-        """ The main orchestrator loop, driving upper_level cycles. """
+        """ The main orchestrator loop, driving seed core cycles. """
         logger.info("Starting main orchestrator loop...")
         while self.is_running:
             loop_start_time = time.monotonic()
 
-            # --- Primary Action: Trigger Upper Level Strategic Cycle ---
-            # Updated log message
-            logger.debug(f"Orchestrator: Triggering UpperLevel Cycle {self.total_cycles_run + 1}...")
-            # Renamed variable
-            upper_level_cycle_completed_successfully = False
+            # --- Primary Action: Trigger Seed Core Strategic Cycle ---
+            logger.debug(f"Orchestrator: Triggering Seed Core Cycle {self.total_cycles_run + 1}...")
+            seed_core_cycle_completed_successfully = False # Renamed variable
             try:
-                # Check if upper_level core and its method exist
-                # Use renamed core and method
-                if not self.upper_level_core or not hasattr(self.upper_level_core, 'run_strategic_cycle') or not callable(self.upper_level_core.run_strategic_cycle):
-                    # Updated log message
-                    logger.critical("Upper Level Core object invalid or missing 'run_strategic_cycle'. Stopping.")
+                # Check if seed core and its method exist
+                if not self.seed_core or not hasattr(self.seed_core, 'run_strategic_cycle') or not callable(self.seed_core.run_strategic_cycle):
+                    logger.critical("Seed Core object invalid or missing 'run_strategic_cycle'. Stopping.")
                     self.is_running = False; break
 
-                # --- Execute Upper Level Cycle ---
-                # Use renamed core and method
-                self.upper_level_core.run_strategic_cycle()
-                # --- End Execute Upper Level Cycle ---
+                # --- Execute Seed Core Cycle ---
+                self.seed_core.run_strategic_cycle()
+                # --- End Execute Seed Core Cycle ---
 
                 self.total_cycles_run += 1
-                # Use renamed variable
-                upper_level_cycle_completed_successfully = True
-                # Updated log message
-                logger.debug(f"Orchestrator: Completed UpperLevel Cycle {self.total_cycles_run}")
+                seed_core_cycle_completed_successfully = True # Renamed variable
+                logger.debug(f"Orchestrator: Completed Seed Core Cycle {self.total_cycles_run}")
 
             except Exception as cycle_err:
-                 # Updated log message
-                 logger.error(f"Error during UpperLevel strategic cycle {self.total_cycles_run + 1}: {cycle_err}", exc_info=True)
-                 try: self.memory.log("UPPER_LEVEL_CycleError", {"cycle": self.total_cycles_run + 1, "error": str(cycle_err)}, tags=['UpperLevel','Error','Cycle']) # Updated key/tag
+                 logger.error(f"Error during Seed Core strategic cycle {self.total_cycles_run + 1}: {cycle_err}", exc_info=True)
+                 try:
+                     # Use updated log key/tags
+                     self.memory.log("SEED_CycleCriticalError", {"cycle": self.total_cycles_run + 1, "error": str(cycle_err)}, tags=['Seed','Error','Cycle','Critical'])
                  except Exception as log_err: logger.error(f"Failed log cycle error: {log_err}")
 
             # --- Check for Restart Signal AFTER the cycle ---
-            # Use renamed variable
-            if upper_level_cycle_completed_successfully and self._check_for_restart_signal():
-                if self._serialize_state_for_restart():
+            if seed_core_cycle_completed_successfully and self._check_for_restart_signal():
+                if self._serialize_state_for_restart(): # This now includes saving memory
                     self._trigger_restart()
                 else:
-                    logger.critical("Failed serialize state for restart. Aborting restart and stopping.")
+                    logger.critical("Failed serialize state/save memory for restart. Aborting restart and stopping.")
                     self.is_running = False
-                break
+                break # Exit loop after restart trigger attempt
 
             # --- Check Termination Condition ---
             if max_cycles is not None and self.total_cycles_run >= max_cycles:
@@ -308,7 +265,8 @@ class Main_Orchestrator:
 
             # --- Yield/Sleep ---
             loop_elapsed = time.monotonic() - loop_start_time
-            sleep_time = max(0.01, 0.05 - loop_elapsed)
+            # Reduced sleep time slightly, adjust as needed
+            sleep_time = max(0.01, 0.02 - loop_elapsed)
             time.sleep(sleep_time)
 
         logger.info("Orchestrator main loop finished.")
@@ -318,7 +276,7 @@ class Main_Orchestrator:
         if self.is_running: logger.warning("Orchestrator already running."); return
 
         run_type = f'Max Cycles: {max_cycles}' if max_cycles else 'Indefinite'
-        logger.info(f"\n*** Starting ModularAGI Run ({run_type}) ***")
+        logger.info(f"\n*** Starting RSIAI Seed Run ({run_type}) ***") # Updated name
         self.is_running = True; self.start_time = time.time()
 
         # --- Main Execution Block ---
@@ -340,70 +298,59 @@ class Main_Orchestrator:
         if not self.is_running and self.start_time == 0: logger.info("Orchestrator already stopped or not fully run."); return
 
         run_duration = time.time() - self.start_time if self.start_time > 0 else 0
-        logger.info(f"\n--- Stopping ModularAGI Run (Duration: {run_duration:.2f}s) ---")
+        logger.info(f"\n--- Stopping RSIAI Seed Run (Duration: {run_duration:.2f}s) ---") # Updated name
         self.is_running = False
 
-        # --- CRITICAL FIX: Save Agent Pool State before final memory save ---
-        agent_pool_state = None
-        if hasattr(self, 'upper_level_core') and self.upper_level_core:
-            # Use renamed core and method
-            if hasattr(self.upper_level_core, 'get_agent_pool_state') and callable(self.upper_level_core.get_agent_pool_state):
-                try:
-                    # Updated log message
-                    logger.info("Retrieving final lower_level agent pool state for saving...")
-                    agent_pool_state = self.upper_level_core.get_agent_pool_state()
-                    # Update memory system's copy before saving memory
-                    if agent_pool_state is not None:
-                        self.memory.update_agent_pool_state(agent_pool_state)
-                        # Updated log message
-                        logger.info(f"Agent pool state (Size: {len(agent_pool_state)}) updated in MemorySystem for final save.")
-                    else:
-                        logger.warning("UpperLevel Core returned None for agent pool state. Not saving pool.")
-                except Exception as pool_err:
-                    logger.error(f"Error getting agent pool state during stop: {pool_err}", exc_info=True)
-            else:
-                logger.warning("UpperLevel Core does not have 'get_agent_pool_state' method. Cannot save agent pool.")
-        # --- End Agent Pool Save Logic ---
-
-
+        # Disconnect VM Service
         if hasattr(self.vm_service, 'disconnect') and callable(self.vm_service.disconnect):
             logger.info("Disconnecting VM Service...")
             try: self.vm_service.disconnect()
             except Exception as e: logger.error(f"Error disconnecting VM Service: {e}", exc_info=True)
 
-        # Final Memory Save (Now includes agent pool state)
-        logger.info("Performing final memory save (incl. agent pool state)...")
+        # Final Memory Save (includes learning state)
+        logger.info("Performing final memory save...")
         if hasattr(self, 'memory') and self.memory and hasattr(self.memory, 'save_memory'):
              try:
-                 self.memory.save_memory() # save_memory now saves the pool state held by memory
+                 self.memory.save_memory()
              except Exception as e: logger.error(f"Error during final memory save: {e}", exc_info=True)
 
-        # TF Session clear for lower_level agents
-        logger.info("Collecting garbage...")
-        try:
-             tf.keras.backend.clear_session(); gc.collect();
-             logger.debug("TF session cleared and GC collected.")
-        except Exception as e: logger.error(f"Error during final GC cleanup: {e}", exc_info=True)
+        # TF Session clear (if still used)
+        if 'tensorflow' in sys.modules:
+            logger.info("Collecting garbage and clearing TF session...")
+            try:
+                 tf.keras.backend.clear_session(); gc.collect();
+                 logger.debug("TF session cleared and GC collected.")
+            except Exception as e: logger.error(f"Error during final GC/TF cleanup: {e}", exc_info=True)
+        else:
+             logger.info("Collecting garbage...")
+             gc.collect()
 
-        # Updated log message
-        logger.info(f"ModularAGI Run Stopped. Total UpperLevel Cycles: {self.total_cycles_run}")
+        logger.info(f"RSIAI Seed Run Stopped. Total Seed Cycles: {self.total_cycles_run}") # Updated name
         self.start_time = 0.0
 
 # --- Script Execution Block ---
 if __name__ == "__main__":
+    # Setup logging first if possible
+    # Example basic config, consider moving to a dedicated logging setup function
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
     is_restarted = '--restarted' in sys.argv
-    if is_restarted: logger.warning("--- Orchestrator performing restart ---"); time.sleep(1)
+    if is_restarted: logging.getLogger(__name__).warning("--- Orchestrator performing restart ---"); time.sleep(1) # Use logger after basicConfig
 
     # --- TensorFlow GPU Configuration ---
-    logger.info("--- TensorFlow Configuration ---"); logger.info(f"TF Version: {tf.__version__}")
-    try:
-        gpus = tf.config.experimental.list_physical_devices('GPU')
-        if gpus:
-            try: [tf.config.experimental.set_memory_growth(gpu, True) for gpu in gpus]; logical_gpus = tf.config.experimental.list_logical_devices('GPU'); logger.info(f"Found {len(gpus)} Physical GPUs, Configured {len(logical_gpus)} Logical GPUs (Mem Growth).")
-            except RuntimeError as e: logger.error(f"GPU Memory Growth Error: {e}.")
-        else: logger.info("No GPUs detected by TensorFlow.")
-    except Exception as e: logger.error(f"GPU Config Error: {e}", exc_info=True)
-    logger.info("-----------------------------")
+    # Optional: Check if TF is imported before attempting config
+    if 'tensorflow' in sys.modules:
+        logger.info("--- TensorFlow Configuration ---"); logger.info(f"TF Version: {tf.__version__}")
+        try:
+            gpus = tf.config.experimental.list_physical_devices('GPU')
+            if gpus:
+                try: [tf.config.experimental.set_memory_growth(gpu, True) for gpu in gpus]; logical_gpus = tf.config.experimental.list_logical_devices('GPU'); logger.info(f"Found {len(gpus)} Physical GPUs, Configured {len(logical_gpus)} Logical GPUs (Mem Growth).")
+                except RuntimeError as e: logger.error(f"GPU Memory Growth Error: {e}.")
+            else: logger.info("No GPUs detected by TensorFlow.")
+        except Exception as e: logger.error(f"GPU Config Error: {e}", exc_info=True)
+        logger.info("-----------------------------")
+    else:
+        logger.info("TensorFlow not imported, skipping GPU configuration.")
 
     # --- Print Alignment Reminder ---
     logger.info("\n--- AGI Alignment Reminder ---"); logger.info(f"Mission: {ALIGNMENT_MISSION}"); logger.info(f"Core Logic: {ALIGNMENT_CORE_LOGIC}"); logger.info(f"Directive: {ALIGNMENT_DIRECTIVE}"); logger.info("--------------------------------")
@@ -411,53 +358,63 @@ if __name__ == "__main__":
     # --- Initialize and Run Orchestrator ---
     orchestrator = None
     try:
-        # Initialize components, potentially loading upper_level/Orchestrator state if restarting
-        # Use renamed class
+        # Initialize components, potentially loading state if restarting
         orchestrator = Main_Orchestrator(load_restart_state=is_restarted)
 
-        # --- Load Memory Data from Restart File (Agent Pool loaded by orchestrator __init__) ---
+        # --- Restore State from Restart File (if restarting) ---
         if is_restarted and os.path.exists(RESTART_STATE_FILE):
-             logger.info("Loading memory data from restart file into existing instance...")
+             logger.info("Attempting to apply state from restart file...")
              loaded_state_components = None
              try:
                  with open(RESTART_STATE_FILE, 'rb') as f: loaded_state_components = pickle.load(f)
 
-                 # Load Memory (Episodic/Lifelong only, Agent Pool loaded via orchestrator init now)
-                 mem_state = loaded_state_components.get('memory_system_state')
-                 if mem_state and isinstance(mem_state, dict):
-                     orchestrator.memory._episodic_memory = deque(mem_state.get('episodic', []), maxlen=orchestrator.memory.max_episodic_size)
-                     orchestrator.memory._lifelong_memory = mem_state.get('lifelong', {})
-                     loaded_keys = mem_state.get('lifelong_keys', [])
-                     valid_keys = [k for k in loaded_keys if k in orchestrator.memory._lifelong_memory]
-                     orchestrator.memory._lifelong_keys_by_age = deque(valid_keys, maxlen=orchestrator.memory.max_lifelong_size)
-                     logger.info(f"MemorySystem state restored ({len(orchestrator.memory._episodic_memory)} ep, {len(orchestrator.memory._lifelong_memory)} ll).")
-                     # Rebuild vector index if needed
-                     if orchestrator.memory.vector_search_enabled:
-                          logger.info("Rebuilding vector index after loading restart state memory...")
-                          orchestrator.memory._rebuild_vector_index()
-                 else: logger.error("Restart state file missing 'memory_system_state'.")
+                 # Restore Seed Core goal (Memory is handled by MemorySystem init/load)
+                 seed_core_state = loaded_state_components.get('seed_core_state')
+                 if seed_core_state and isinstance(seed_core_state, dict):
+                     restored_goal = seed_core_state.get('current_goal')
+                     if restored_goal:
+                         logger.info(f"Restoring goal from restart state: {restored_goal.get('description')}")
+                         if hasattr(orchestrator.seed_core, 'set_goal'):
+                             orchestrator.seed_core.set_goal(restored_goal) # Use set_goal for consistency
+                         elif hasattr(orchestrator.seed_core, 'current_goal'):
+                              orchestrator.seed_core.current_goal = restored_goal
+                              logger.warning("Restored goal via direct attribute setting (set_goal method missing).")
+                         else:
+                               logger.error("Could not restore goal: Seed Core lacks set_goal method and current_goal attribute.")
+                     else: logger.warning("Restart state file missing 'current_goal' in 'seed_core_state'.")
+                 else: logger.warning("Restart state file missing 'seed_core_state'.")
 
-                 # Clean up restart file after successful load
+                 # Restore Orchestrator cycle count
+                 orchestrator_state = loaded_state_components.get('orchestrator_state')
+                 if orchestrator_state and isinstance(orchestrator_state, dict):
+                     orchestrator.total_cycles_run = orchestrator_state.get('total_cycles_run', orchestrator.total_cycles_run)
+                     if hasattr(orchestrator.seed_core, 'cycle_count'):
+                         orchestrator.seed_core.cycle_count = orchestrator.total_cycles_run
+                     logger.info(f"Restarted orchestrator cycle count restored to {orchestrator.total_cycles_run}.")
+
+                 # Clean up restart file after successful processing
                  try: os.remove(RESTART_STATE_FILE); logger.info(f"Removed restart state file: {RESTART_STATE_FILE}")
                  except OSError as e: logger.error(f"Failed remove restart state file post-load: {e}")
 
-             except Exception as load_err: logger.error(f"Error processing restart state file after init: {load_err}", exc_info=True)
+             except Exception as load_err:
+                 logger.error(f"Error processing restart state file after init: {load_err}", exc_info=True)
 
-        # Set initial goal/config if not restarting or if state wasn't loaded
-        # Use renamed core and goal constant
-        if not is_restarted or not orchestrator.upper_level_core.current_goal:
-             # Use updated goal constant name
-             logger.info("Setting initial UpperLevel goal and LowerLevel config...")
+        # Set initial goal ONLY if not restarting OR if state wasn't successfully loaded
+        if not orchestrator.seed_core.current_goal: # Check if goal is still unset
+             logger.info("Setting initial Seed goal...")
              # Use renamed core and method
-             if hasattr(orchestrator.upper_level_core, 'set_initial_state'):
-                 orchestrator.upper_level_core.set_initial_state(
-                     goal=UPPER_LEVEL_INITIAL_GOAL, # Updated constant
-                     lower_level_config={} # Start with empty base lower_level config
+             if hasattr(orchestrator.seed_core, 'set_initial_state'):
+                 # Pass only the goal dictionary now
+                 orchestrator.seed_core.set_initial_state(
+                     goal=SEED_INITIAL_GOAL # Use the correct constant
                  )
-             else: # Fallback
-                 orchestrator.upper_level_core.current_goal = UPPER_LEVEL_INITIAL_GOAL
-                 orchestrator.upper_level_core.lower_level_base_config = {}
-                 logger.warning("UpperLevel Core lacks set_initial_state method, setting attributes directly.")
+             elif hasattr(orchestrator.seed_core, 'current_goal'): # Fallback
+                 orchestrator.seed_core.current_goal = SEED_INITIAL_GOAL # Use the correct constant
+                 logger.warning("Seed Core lacks set_initial_state method, setting current_goal attribute directly.")
+             else:
+                  logger.critical("Cannot set initial goal: Seed Core missing set_initial_state method and current_goal attribute.")
+                  # Consider exiting if initial goal cannot be set
+                  # sys.exit(1)
 
         # Run the orchestrator
         orchestrator.run(max_cycles=None) # Example: Run indefinitely
@@ -469,27 +426,44 @@ if __name__ == "__main__":
              try: orchestrator.stop()
              except Exception as stop_err: logger.error(f"Emergency stop failed: {stop_err}")
     finally:
-        # --- Post-Run Analysis (Updated Memory Keys) ---
+        # --- Post-Run Analysis ---
         logger.info("\n--- Post-Run Analysis ---")
         if orchestrator and hasattr(orchestrator, 'memory') and orchestrator.memory:
             try:
-                def dump_mem(label: str, filter_func: Callable[[Dict], bool], limit: int = 3, newest: bool = True):
-                    try: data=orchestrator.memory.find_lifelong_by_criteria(filter_func,limit=limit,newest_first=newest); logger.info(f"\n{label} ({len(data)}):\n{json.dumps(data,indent=2,default=str)}")
-                    except Exception as e: logger.error(f"Error retrieving '{label}': {e}")
+                # Define a helper function for cleaner analysis logging
+                def dump_mem_summary(label: str, filter_func: Callable[[Dict], bool], limit: int = 3, newest: bool = True):
+                    try:
+                        entries = orchestrator.memory.find_lifelong_by_criteria(filter_func, limit=limit, newest_first=newest)
+                        # Optionally summarize entries further if too verbose
+                        summaries = [f"({e.get('key', 'no_key')}: {json.dumps(e.get('data', {}).get('message', e.get('data', {})[:50]), default=str)})" for e in entries]
+                        logger.info(f"\n{label} (Last {len(entries)}): {', '.join(summaries)}")
+                    except Exception as e:
+                        logger.error(f"Error retrieving/summarizing '{label}': {e}")
 
-                latest_epi = orchestrator.memory.get_latest_episodic(5); logger.info(f"Last {len(latest_epi)} Episodic:\n{json.dumps(latest_epi, indent=2, default=str)}")
-                # Use updated keys
-                dump_mem("Last UpperLevel Evals", lambda e: e.get('key','').startswith("UPPER_LEVEL_Evaluation"))
-                dump_mem("Last UpperLevel Decisions", lambda e: e.get('key','').startswith("UPPER_LEVEL_Decision"))
-                dump_mem("Last LowerLevel Summaries", lambda e: e.get('key','').startswith("LOWER_LEVEL_Summary"), limit=2)
-                dump_mem("Last LowerLevel Sequences", lambda e: e.get('key','').startswith("LOWER_LEVEL_SuccessfulSequence"), limit=2)
-                dump_mem("Last UpperLevel Goals", lambda e: e.get('key','').startswith("upper_level_goal_set"), limit=2)
-                dump_mem("Last UpperLevel FS Writes", lambda e: e.get('key','').startswith("UPPER_LEVEL_Action_WRITE_FILE"), limit=2)
-                dump_mem("Last UpperLevel Restarts", lambda e: e.get('key','').startswith("UPPER_LEVEL_Action_REQUEST_RESTART"), limit=2)
-                dump_mem("Recent Errors", lambda e: 'Error' in e.get('tags', []) or 'Critical' in e.get('tags',[]))
-                dump_mem("Restart Signals", lambda e: e.get('key','').startswith(RESTART_SIGNAL_EVENT_TYPE), limit=5)
-            except Exception as post_run_error: logger.error(f"Post-run analysis error: {post_run_error}", exc_info=True)
-        else: logger.warning("Orchestrator/memory not available for post-run analysis.")
-        logger.info("\n--- ModularAGI Execution Finished ---")
+                latest_epi = orchestrator.memory.get_latest_episodic(5);
+                epi_summary = [f"({e.get('id', '?')}: {e.get('data',{}).get('event_type', '?')})" for e in latest_epi]
+                logger.info(f"Last {len(latest_epi)} Episodic: {', '.join(epi_summary)}")
 
-# --- END OF FILE main.py ---
+                dump_mem_summary("Last SEED Evals", lambda e: e.get('key','').startswith("SEED_Evaluation"))
+                dump_mem_summary("Last SEED Decisions", lambda e: e.get('key','').startswith("SEED_Decision"))
+                dump_mem_summary("Last SEED Goals", lambda e: e.get('key','').startswith("seed_goal_set"), limit=2)
+                dump_mem_summary("Last CoreMod Writes", lambda e: e.get('key','').startswith("SEED_Action_MODIFY_CORE_CODE"), limit=2)
+                dump_mem_summary("Last CoreMod Verifications", lambda e: e.get('key','').startswith("SEED_Action_VERIFY_CORE"), limit=2)
+                dump_mem_summary("Last CoreMod Tests", lambda e: e.get('key','').startswith("SEED_Action_TEST_CORE"), limit=2)
+                dump_mem_summary("Last Restarts Req", lambda e: e.get('key','').startswith(RESTART_SIGNAL_EVENT_TYPE), limit=5)
+                dump_mem_summary("Recent Errors", lambda e: 'Error' in e.get('tags', []) or 'Critical' in e.get('tags',[]))
+
+                # Log learning state summary
+                current_params = orchestrator.memory.get_learning_parameter('')
+                param_summary = json.dumps({cat: {p: v.get('value') for p, v in params.items()} if cat=="evaluation_weights" else params.get('value') for cat, params in current_params.items()}, indent=2)
+                logger.info(f"\nFinal Learning Parameters:\n{param_summary}")
+                rules = orchestrator.memory.get_behavioral_rules()
+                logger.info(f"\nFinal Behavioral Rules ({len(rules)}): {list(rules.keys())}")
+
+            except Exception as post_run_error:
+                logger.error(f"Post-run analysis error: {post_run_error}", exc_info=True)
+        else:
+            logger.warning("Orchestrator/memory not available for post-run analysis.")
+        logger.info("\n--- RSIAI Seed Execution Finished ---")
+
+# --- END OF FILE seed/main.py ---
