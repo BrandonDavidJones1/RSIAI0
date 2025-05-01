@@ -22,7 +22,7 @@ import uuid   # For SAFE_EXEC_GLOBALS (if needed for testing rules/params)
 # --- Logging Config ---
 # Note: Basic config might be overridden if set later, e.g., in main.py
 # Consider moving comprehensive logging setup elsewhere if needed before this.
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # --- Alignment ---
@@ -58,7 +58,7 @@ Think like a programmer building an AI that learns to program itself. Your actio
 **Your Task:**
 Based on the Seed's current state, memory, and the **strategic objective of building its internal cognitive tools**, select the **single action** from `AVAILABLE_ACTIONS` that constitutes the most critical and safe next step in implementing one of the target internal capabilities. Your `reasoning` **MUST** clearly state which internal capability the chosen action helps build and why it's the priority now.
 
-**Output Format:** Respond ONLY with a single, valid JSON object.
+**Output Format:** Respond ONLY with a one, (single line), valid JSON object.
 
 ```json
 {{
@@ -67,8 +67,6 @@ Based on the Seed's current state, memory, and the **strategic objective of buil
   // ... other parameters specific to ACTION_NAME ...
 }}
 ```"""
-# --- >>> END REWRITTEN ALIGNMENT_PROMPT <<< ---
-
 
 # --- Seed Core Configuration ---
 SEED_INITIAL_GOAL = {"target": "bootstrap_intelligence", "description": "Implement core internal analysis and learning functions within self."} # Initial goal set to bootstrapping

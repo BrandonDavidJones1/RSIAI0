@@ -154,11 +154,18 @@ class Seed_VMService:
         # Renamed internal var
         self._simulated_state = {
             'timestamp': time.time(), 'cwd': self._simulated_system_cwd,
-            'filesystem': { # Basic FS
+            'filesystem': { # Basic FS - ** UPDATED TO INCLUDE /app/seed **
                 '/': {'type': 'directory', 'owner': 'root', 'perms': 'rwxr-xr-x', 'mtime': time.time(), 'size_bytes': 4096},
                 '/app': {'type': 'directory', 'owner': 'user', 'perms': 'rwxr-xr-x', 'mtime': time.time(), 'size_bytes': 4096},
                 '/tmp': {'type': 'directory', 'owner': 'user', 'perms': 'rwxrwxrwx', 'mtime': time.time(), 'size_bytes': 4096},
-                '/app/placeholder.txt': {'type': 'file', 'content': 'Initial content.', 'owner': 'user', 'perms': 'rw-r--r--', 'mtime': time.time(), 'size_bytes': 16},
+                # Add the missing seed directory and files
+                '/app/seed': {'type': 'directory', 'owner': 'user', 'perms': 'rwxr-xr-x', 'mtime': time.time(), 'size_bytes': 4096},
+                '/app/seed/__init__.py': {'type': 'file', 'content': '# Seed package init\n', 'owner': 'user', 'perms': 'rw-r--r--', 'mtime': time.time(), 'size_bytes': 20},
+                '/app/seed/core.py': {'type': 'file', 'content': '# RSIAI/seed/core.py\nprint("Simulated core.py content")\n', 'owner': 'user', 'perms': 'rw-r--r--', 'mtime': time.time(), 'size_bytes': 60},
+                '/app/seed/memory_system.py': {'type': 'file', 'content': '# RSIAI/seed/memory_system.py\nprint("Simulated memory_system.py content")\n', 'owner': 'user', 'perms': 'rw-r--r--', 'mtime': time.time(), 'size_bytes': 70},
+                '/app/seed/config.py': {'type': 'file', 'content': '# RSIAI/seed/config.py\nprint("Simulated config.py content")\n', 'owner': 'user', 'perms': 'rw-r--r--', 'mtime': time.time(), 'size_bytes': 64},
+                # Add other essential files here if needed for testing
+                # '/app/placeholder.txt': {'type': 'file', 'content': 'Initial content.', 'owner': 'user', 'perms': 'rw-r--r--', 'mtime': time.time(), 'size_bytes': 16}, # Removed old placeholder
             },
             'resources': {'cpu_load_percent': 1.0, 'memory_usage_percent': 5.0, 'disk_usage_percent': 10.0}, # Lower defaults
             'last_command_result': None,
@@ -812,7 +819,8 @@ class Seed_VMService:
                     if abs_hint_path:
                         # Ensure the entry exists for the hint path, marking if it doesn't
                         if abs_hint_path not in sim_fs:
-                            sim_fs[abs_hint_path] = {'type': None, 'exists': False}
+                            # Add placeholder info indicating non-existence
+                            sim_fs[abs_hint_path] = {'type': None, 'exists': False, 'error': 'No such file or directory (Simulated)'}
                         else:
                              # Ensure 'exists' flag is present and correct
                              sim_fs[abs_hint_path]['exists'] = True

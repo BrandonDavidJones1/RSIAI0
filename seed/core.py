@@ -45,7 +45,8 @@ from .config import (
     CORE_CODE_VERIFICATION_SUITES,
     SAFE_EXEC_GLOBALS,
     LLM_DEFAULT_MAX_TOKENS,
-    SEED_LEARNING_PARAMETERS # Need this for fallback weights
+    SEED_LEARNING_PARAMETERS,
+    LLM_MANUAL_MODE
 )
 # --- Service and Helper Imports ---
 # Use relative imports now
@@ -545,10 +546,21 @@ class Seed_Core:
             if action_type == "EXECUTE_VM_COMMAND":
                 if not isinstance(llm_decision.get("command"), str) or not llm_decision["command"]: raise ValueError("EXECUTE_VM_COMMAND: Missing/invalid 'command' (string).")
             elif action_type == "WRITE_FILE":
-                if not isinstance(llm_decision.get("path"), str) or not llm_decision.get("path"): raise ValueError("WRITE_FILE: Missing/invalid 'path' (string).")
+                # Check for 'filepath' used by some LLMs/users, fall back to 'path'
+                file_path = llm_decision.get("filepath", llm_decision.get("path"))
+                if not isinstance(file_path, str) or not file_path: raise ValueError("WRITE_FILE: Missing/invalid 'filepath' or 'path' (string).")
                 if "content" not in llm_decision: raise ValueError("WRITE_FILE: Missing 'content'.") # Content can be any type representable
+                # Store the validated path key for execution
+                llm_decision['path'] = file_path # Standardize to 'path' internally if 'filepath' was used
             elif action_type == "READ_FILE":
-                if not isinstance(llm_decision.get("path"), str) or not llm_decision.get("path"): raise ValueError("READ_FILE: Missing/invalid 'path' (string).")
+                # *** MODIFIED BLOCK START ***
+                # Check for 'filepath' first, then 'path', to handle inconsistency
+                file_path = llm_decision.get("filepath", llm_decision.get("path"))
+                if not isinstance(file_path, str) or not file_path:
+                    raise ValueError("READ_FILE: Missing/invalid 'filepath' or 'path' (string).")
+                # Standardize to 'path' internally for execution if 'filepath' was used
+                llm_decision['path'] = file_path
+                # *** MODIFIED BLOCK END ***
             elif action_type == "REQUEST_RESTART":
                 if not isinstance(llm_decision.get("reasoning"), str) or not llm_decision.get("reasoning"): raise ValueError("REQUEST_RESTART: Missing 'reasoning' (string).")
             elif action_type == "UPDATE_GOAL":
@@ -696,11 +708,13 @@ class Seed_Core:
                              exec_res = {"success": False, "message": f"Core code modification rejected: {verification_reason}"}; log_tags.extend(['Error', 'Safety', 'Verification']);
                              logger.warning(f"Core code modification for hash {verification_hash[:8]} REJECTED: {verification_reason}")
             elif action_type == "READ_FILE":
+                 # Use the 'path' standardized during validation
                  path = action_params.get("path"); logger.info(f"Seed Reading file: '{path}'");
                  if path and isinstance(path, str): read_res = self.vm_service.read_file(path); exec_res = read_res if isinstance(read_res, dict) else {"success": False, "message": "Invalid response from vm_service.read_file"}; exec_res['reason'] = read_res.get('reason')
                  else: exec_res={"success": False, "message": "Requires valid 'path'."}; log_tags.append('Error'); exec_res['reason'] = 'invalid_argument'
                  if not exec_res.get("success", True): log_tags.append('Error') # Log error tag if read failed
             elif action_type == "WRITE_FILE":
+                 # Use the 'path' standardized during validation
                  path = action_params.get("path"); content = action_params.get("content"); logger.info(f"Seed Writing to file: '{path}' (Content type: {type(content).__name__})")
                  if path and isinstance(path, str) and content is not None:
                       # Ensure content is string for VM service file write
