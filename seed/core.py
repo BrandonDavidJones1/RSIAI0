@@ -14,7 +14,7 @@ import copy
 import traceback
 import logging
 import uuid
-import collections
+import collections # <-- Added import
 import gc
 import numpy as np
 # import tensorflow as tf # No longer needed here if agents are removed
@@ -304,6 +304,76 @@ class Seed_Core:
 
         return triggered_rules_info
 
+    # --- Internal Analysis (New) ---
+    def _analyze_memory_patterns(self) -> Dict:
+        """
+        Analyzes memory for patterns related to action success, errors, etc.
+        (Basic implementation for bootstrapping).
+        """
+        analysis_results = {
+            "action_success_rates": {},
+            "common_errors": [],
+            "rule_effectiveness": {}, # Placeholder for future rule analysis
+            "error": None
+        }
+        logger.debug("Running internal memory pattern analysis...")
+        try:
+            # --- Analyze Action Success Rates ---
+            evals = self.memory.find_lifelong_by_criteria(
+                lambda e: e.get('key','').startswith("SEED_Evaluation"),
+                limit=100, # Analyze up to 100 recent evaluations
+                newest_first=True
+            )
+            actions_summary = collections.defaultdict(lambda: {'count': 0, 'success_sum': 0.0})
+
+            for eval_entry in evals:
+                data = eval_entry.get('data', {})
+                # Extract base action type (handle : variations)
+                action_summary_str = data.get('action_summary', 'Unknown')
+                action_type = action_summary_str.split(':')[0].strip()
+                success_score = data.get('overall_success', 0.0)
+
+                actions_summary[action_type]['count'] += 1
+                actions_summary[action_type]['success_sum'] += success_score
+
+            # Calculate average success rates
+            for act_type, summary in actions_summary.items():
+                if summary['count'] > 0:
+                    avg_success = round(summary['success_sum'] / summary['count'], 2)
+                    analysis_results["action_success_rates"][act_type] = {
+                        "avg_success": avg_success,
+                        "count": summary['count']
+                    }
+
+            # --- Analyze Common Errors ---
+            errors = self.memory.find_lifelong_by_criteria(
+                # Look for errors logged by Core or LLM
+                lambda e: ('Error' in e.get('tags',[]) or 'Critical' in e.get('tags',[])) and \
+                          (e.get('key','').startswith("SEED_Action_") or e.get('key','').startswith("SEED_LLMError")),
+                limit=50, # Analyze up to 50 recent errors
+                newest_first=True
+            )
+            # Prioritize specific 'reason' if available, else use error message
+            error_reasons = collections.Counter(
+                e.get('data', {}).get('result_reason') or \
+                e.get('data', {}).get('error') or \
+                e.get('data', {}).get('result_msg') # Fallback to result message
+                for e in errors if e.get('data')
+            )
+            # Store top 3 most common non-None reasons
+            analysis_results["common_errors"] = [(reason, count) for reason, count in error_reasons.most_common(3) if reason]
+
+            # --- Rule Effectiveness Analysis (Placeholder) ---
+            # TODO: Implement analysis of how often rules trigger and if subsequent actions succeed/fail.
+            analysis_results["rule_effectiveness"] = "Not Implemented Yet"
+
+        except Exception as e:
+            logger.error(f"Error during _analyze_memory_patterns: {e}", exc_info=True)
+            analysis_results["error"] = str(e)
+
+        logger.debug(f"Internal memory pattern analysis completed. Results: {analysis_results}")
+        return analysis_results
+
     # --- Main Execution Cycle ---
     def run_strategic_cycle(self):
         """ Executes one full Seed Sense-Analyze-Decide-Act-Evaluate cycle. """
@@ -316,7 +386,7 @@ class Seed_Core:
         evaluation: Optional[Dict] = None
         vm_state_snapshot: Optional[Dict] = None
         pre_action_snapshot: Optional[Dict] = None
-        internal_analysis_summary: str = "N/A"
+        internal_analysis_summary: str = "N/A" # Initialize
         triggered_rules_info: List[Dict] = []
 
         try:
@@ -324,7 +394,6 @@ class Seed_Core:
             logger.debug(f"Seed [{cycle_id}]: Sensing VM state...")
             vm_state_snapshot = self.vm_service.get_state(target_path_hint=self.current_goal.get('path'))
             if not vm_state_snapshot:
-                 # Should not happen if vm_service returns error dict, but check anyway
                  raise RuntimeError("VM Service returned None instead of state/error dictionary.")
             if vm_state_snapshot.get("error"):
                 raise RuntimeError(f"VM Service failed during state retrieval: {vm_state_snapshot.get('error', 'Unknown error')}")
@@ -332,56 +401,64 @@ class Seed_Core:
             logger.debug(f"Seed [{cycle_id}]: Refining sensory input...")
             self.current_sensory_input = self.sensory_refiner.refine(vm_state_snapshot)
             if not self.current_sensory_input:
-                 # Sensory refiner might return None on critical error
                  raise RuntimeError("Sensory Refinement failed to produce valid input.")
             logger.info(f"Seed [{cycle_id}]: Sense complete. CWD: {self.current_sensory_input.get('cwd')}, Health: {self.current_sensory_input.get('summary',{}).get('estimated_health')}")
 
-            # Create pre-action snapshot for evaluation and rule checking
             pre_action_snapshot = {
                 'timestamp': time.time(),
                 'seedGoal': copy.deepcopy(self.current_goal),
                 'seedSensory': copy.deepcopy(self.current_sensory_input),
-                'vm_snapshot': copy.deepcopy(vm_state_snapshot), # Include raw snapshot? Optional.
+                'vm_snapshot': copy.deepcopy(vm_state_snapshot),
                 'cycle_id': cycle_id
             }
 
             # 2. --- ANALYZE (Internal) ---
             logger.debug(f"Seed [{cycle_id}]: Performing internal analysis...")
+            triggered_rules_info = []
+            analysis_summary_parts = [] # List to build the summary string
             try:
-                 # Check behavioral rules against the current state
+                 # Check behavioral rules
                  triggered_rules_info = self._check_behavioral_rules(pre_action_snapshot)
+                 analysis_summary_parts.append(f"Triggered Rules: {len(triggered_rules_info)}.")
 
-                 # Basic analysis (can be expanded via self-modification)
-                 # TODO: Implement more sophisticated internal analysis functions here
-                 # For now, just summarizing recent evals/errors/rules
-                 recent_evals = self.memory.find_lifelong_by_criteria(lambda e: e.get('key','').startswith("SEED_Evaluation"), limit=5, newest_first=True)
-                 recent_errors = self.memory.find_lifelong_by_criteria(lambda e: 'Error' in e.get('tags', []) or 'Critical' in e.get('tags',[]), limit=5, newest_first=True)
-                 error_count = len(recent_errors)
-                 avg_success = np.mean([e['data'].get('overall_success', 0.0) for e in recent_evals if e.get('data')]) if recent_evals else 0.0
-                 internal_analysis_summary = f"Recent Avg Success: {avg_success:.2f}. Recent Errors: {error_count}. Triggered Rules: {len(triggered_rules_info)}."
+                 # --- Call the new pattern analysis function ---
+                 pattern_analysis = self._analyze_memory_patterns()
+
+                 # --- Integrate pattern analysis results into summary ---
+                 if pattern_analysis.get("action_success_rates"):
+                     rates_str = ", ".join([f"{k}={v['avg_success']:.2f}({v['count']})"
+                                            for k, v in sorted(pattern_analysis["action_success_rates"].items())]) # Sort for consistency
+                     analysis_summary_parts.append(f"Action Rates: [{rates_str}].")
+                 if pattern_analysis.get("common_errors"):
+                     errs_str = ", ".join([f"'{reason}':{count}" for reason, count in pattern_analysis["common_errors"]])
+                     analysis_summary_parts.append(f"Common Errors: [{errs_str}].")
+                 if pattern_analysis.get("error"): # Log internal analysis errors
+                     analysis_summary_parts.append(f"AnalysisInternalErr: {pattern_analysis['error'][:50]}...")
+
+                 # Combine parts into the final summary string
+                 internal_analysis_summary = " ".join(analysis_summary_parts)
                  logger.info(f"Seed [{cycle_id}]: Internal Analysis: {internal_analysis_summary}")
+
             except Exception as analysis_err:
-                 logger.error(f"Seed [{cycle_id}]: Internal analysis step failed: {analysis_err}", exc_info=True)
-                 internal_analysis_summary = f"Error during internal analysis: {analysis_err}"
+                 logger.error(f"Seed [{cycle_id}]: Top-level internal analysis step failed: {analysis_err}", exc_info=True)
+                 internal_analysis_summary = f"Error during internal analysis stage: {analysis_err}"
 
 
             # 3. --- DECIDE (LLM Interaction + Rule Influence) ---
             logger.info(f"Seed [{cycle_id}]: Querying LLM (or user) for next action...")
-            # Fetch current LLM temperature from learning parameters
-            # Use .value notation consistent with update/get logic
             llm_temp = self.memory.get_learning_parameter('llm_query_temperature.value')
-            if not isinstance(llm_temp, (float, int)): # Fallback if not retrieved correctly
+            if not isinstance(llm_temp, (float, int)):
                  logger.warning(f"Invalid LLM temperature retrieved ({llm_temp}), using default 0.5.")
                  llm_temp = 0.5
 
             llm_prompt = self._build_llm_prompt(
                 self.current_sensory_input,
-                internal_analysis_summary,
+                internal_analysis_summary, # Use the newly generated summary
                 triggered_rules_info
             )
             llm_response_raw = self.llm_service.query(
                 llm_prompt,
-                system_prompt_override=ALIGNMENT_PROMPT, # Use the main bootstrap prompt
+                system_prompt_override=ALIGNMENT_PROMPT,
                 temperature=llm_temp,
                 max_tokens=LLM_DEFAULT_MAX_TOKENS
             )
@@ -393,11 +470,10 @@ class Seed_Core:
             # --- Rule Application Logic ---
             rule_mode = self.memory.get_learning_parameter('rule_application_mode.value') or "log_suggestion"
             if rule_mode == "pre_llm_filter" and triggered_rules_info:
-                 # TODO: Implement logic to potentially modify or veto LLM action based on triggered rules
                  logger.warning(f"Rule application mode '{rule_mode}' not fully implemented. Using LLM/Manual action.")
-                 pass # For now, just log the warning
+                 pass
 
-            if not action_to_execute or action_to_execute.get("action_type") == "FALLBACK": # Check if validation failed/returned fallback
+            if not action_to_execute or action_to_execute.get("action_type") == "FALLBACK":
                 fallback_reason = action_to_execute.get("reasoning", "LLM response validation failed.") if action_to_execute else "LLM decision was None."
                 logger.error(f"Seed [{cycle_id}]: LLM/Manual decision invalid or fallback needed. Reason: {fallback_reason}. Using fallback action.")
                 action_to_execute = self._get_fallback_action(fallback_reason)
@@ -405,16 +481,13 @@ class Seed_Core:
 
             logger.info(f"Seed [{cycle_id}]: Action Decided ({action_source}): {action_to_execute.get('action_type')}")
 
-            # Log the decision that will be acted upon
             log_decision = copy.deepcopy(action_to_execute)
             log_decision['action_source'] = action_source
             self.memory.log(f"SEED_Decision_{cycle_id}", log_decision, tags=['Seed', 'Decision', action_source])
 
-
             # 4. --- ACT ---
             action_type = action_to_execute.get("action_type", "NO_OP")
             execution_result = self._execute_seed_action(action_type, action_to_execute, cycle_id, current_depth=0)
-
 
             # 5. --- EVALUATE ---
             logger.debug(f"Seed [{cycle_id}]: Re-sensing VM state after action...")
@@ -422,35 +495,29 @@ class Seed_Core:
             post_action_sensory = self.sensory_refiner.refine(post_action_vm_state)
             if not post_action_sensory:
                  logger.warning(f"Seed [{cycle_id}]: Failed to refine post-action sensory input. Evaluation might be inaccurate.")
-                 # Evaluation function should handle post_action_sensory being None
 
             logger.debug(f"Seed [{cycle_id}]: Evaluating action success...")
             if pre_action_snapshot:
-                 # Fetch current evaluation weights dictionary
-                 # Use get_learning_parameter which returns the dict for the category
                  eval_weights_config = self.memory.get_learning_parameter('evaluation_weights')
                  if isinstance(eval_weights_config, dict):
-                     # Extract the 'value' from each sub-dict
                      current_eval_weights = {k: v.get('value') for k,v in eval_weights_config.items() if isinstance(v, dict) and 'value' in v}
                  else:
                       logger.error(f"Seed [{cycle_id}]: Failed to retrieve valid evaluation weights category! Using defaults from config.")
-                      # Fallback to config defaults if retrieval fails badly
                       current_eval_weights = {k: v.get('value', 0.0) for k, v in SEED_LEARNING_PARAMETERS.get('evaluation_weights', {}).items()}
 
                  evaluation = self.success_evaluator.evaluate_seed_action_success(
                      initial_state_snapshot=pre_action_snapshot,
-                     post_action_sensory_input=post_action_sensory, # Pass potentially None value
+                     post_action_sensory_input=post_action_sensory,
                      execution_result=execution_result,
                      action_taken=action_to_execute,
                      current_goal=self.current_goal,
-                     evaluation_weights=current_eval_weights # Pass current weights
+                     evaluation_weights=current_eval_weights
                  )
                  logger.info(f"Seed [{cycle_id}]: Evaluation Score={evaluation.get('overall_success', 0.0):.3f}. Msg: {evaluation.get('message')}")
                  self.memory.log(f"SEED_Evaluation_{cycle_id}", evaluation, tags=['Seed', 'Evaluation'])
             else:
                  logger.error(f"Seed [{cycle_id}]: Cannot evaluate - pre_action_snapshot was not captured.")
 
-            # Update current view for the *next* cycle if refinement was successful
             if post_action_sensory:
                 self.current_sensory_input = post_action_sensory
 
@@ -466,16 +533,16 @@ class Seed_Core:
     # --- LLM Prompting and Validation ---
     def _build_llm_prompt(self,
                           sensory_input: Optional[RefinedInput],
-                          internal_analysis: str,
+                          internal_analysis: str, # Accepts the combined analysis summary
                           triggered_rules: List[Dict]) -> str:
         """ Constructs the prompt for the LLM, including analysis and triggered rules. """
         prompt = "## Seed Strategic Cycle Input\n\n"
         prompt += f"**Current Goal:**\n```json\n{json.dumps(self.current_goal, indent=2)}\n```\n\n"
-        prompt += f"**Constraints:**\n- {'; '.join(self.constraints)}\n\n" # Formatted as list
+        prompt += f"**Constraints:**\n- {'; '.join(self.constraints)}\n\n"
+        # Use the provided internal_analysis string directly
         prompt += f"**Internal Analysis Summary:** {internal_analysis}\n\n"
 
         if sensory_input:
-            # Use a limited, serializable version of sensory input for the prompt
             prompt_sensory = {
                 'summary': sensory_input.get('summary'),
                 'cwd': sensory_input.get('cwd'),
@@ -486,36 +553,31 @@ class Seed_Core:
         else:
             prompt += "**Current Environment State:** Unknown/Unavailable\n\n"
 
-        # Include Triggered Rules
         if triggered_rules:
             prompt += "**Triggered Behavioral Rules (Consider these heuristics):**\n"
             for rule in triggered_rules:
-                 prompt += f"- Rule '{rule.get('rule_id')}': Suggests '{rule.get('suggested_response')}'\n" # Be explicit
+                 prompt += f"- Rule '{rule.get('rule_id')}': Suggests '{rule.get('suggested_response')}'\n"
             prompt += "\n"
 
-        # Recent Evals Summary
         try:
             recent_evals = self.memory.find_lifelong_by_criteria(lambda e: e.get('key','').startswith("SEED_Evaluation"), limit=3, newest_first=True)
-            # Simplify eval output for prompt
             simplified_evals = [{'action': e['data'].get('action_summary'), 'success': round(e['data'].get('overall_success',0),2), 'msg': e['data'].get('message')} for e in recent_evals if e.get('data')]
             if simplified_evals:
                  prompt += f"**Recent Evaluations (Summary - Max 3):**\n```json\n{json.dumps(simplified_evals, indent=2, default=str)}\n```\n\n"
         except Exception as mem_e: logger.warning(f"Failed retrieve/simplify recent evals for prompt: {mem_e}")
 
-        # Verified Code Mods Ready for Apply
         valid_verified_count = 0
         if self._verified_code_mods:
             prompt += "**Recently Verified Code Modifications (Ready for MODIFY_CORE_CODE):**\n"
-            # Only show valid, unexpired, successful verifications
+            now = time.time()
             for mod_hash, v_data in self._verified_code_mods.items():
-                 if v_data.get('result',{}).get('success') and time.time()-v_data.get('timestamp',0) < self._verified_mod_expiry_sec:
+                 if v_data.get('result',{}).get('success') and now - v_data.get('timestamp',0) < self._verified_mod_expiry_sec:
                      params = v_data.get('params', {})
-                     # Provide enough info to identify the change
                      target_info = params.get('target_name') or params.get('target_line_content','?')[:30]+"..."
                      prompt += f"- Hash `{mod_hash[:8]}`: File='{params.get('file_path', '?')}', Target='{target_info}', Type='{params.get('modification_type', '?')}'\n"
                      valid_verified_count += 1
             if valid_verified_count == 0:
-                 prompt += "- None\n" # Explicitly state if none are ready
+                 prompt += "- None\n"
             prompt += "\n"
 
 
@@ -530,7 +592,6 @@ class Seed_Core:
         if not llm_response_raw or not isinstance(llm_response_raw, str):
             logger.error(f"Seed [{cycle_id}]: LLM response empty/invalid type."); return self._get_fallback_action("LLM response empty/invalid type")
         try:
-            # Try to find JSON within potential extra text (more robust)
             match = re.search(r'\{.*\}', llm_response_raw, re.DOTALL)
             if not match: raise ValueError("Response does not contain a recognizable JSON object.")
             json_str = match.group(0)
@@ -546,21 +607,19 @@ class Seed_Core:
             if action_type == "EXECUTE_VM_COMMAND":
                 if not isinstance(llm_decision.get("command"), str) or not llm_decision["command"]: raise ValueError("EXECUTE_VM_COMMAND: Missing/invalid 'command' (string).")
             elif action_type == "WRITE_FILE":
-                # Check for 'filepath' used by some LLMs/users, fall back to 'path'
-                file_path = llm_decision.get("filepath", llm_decision.get("path"))
-                if not isinstance(file_path, str) or not file_path: raise ValueError("WRITE_FILE: Missing/invalid 'filepath' or 'path' (string).")
-                if "content" not in llm_decision: raise ValueError("WRITE_FILE: Missing 'content'.") # Content can be any type representable
-                # Store the validated path key for execution
-                llm_decision['path'] = file_path # Standardize to 'path' internally if 'filepath' was used
+                file_path = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path"))) # Check all 3
+                if not isinstance(file_path, str) or not file_path: raise ValueError("WRITE_FILE: Missing/invalid 'filepath', 'file_path', or 'path' (string).")
+                if "content" not in llm_decision: raise ValueError("WRITE_FILE: Missing 'content'.")
+                llm_decision['path'] = file_path # Standardize to 'path' internally
             elif action_type == "READ_FILE":
-                # *** MODIFIED BLOCK START ***
-                # Check for 'filepath' first, then 'path', to handle inconsistency
-                file_path = llm_decision.get("filepath", llm_decision.get("path"))
-                if not isinstance(file_path, str) or not file_path:
-                    raise ValueError("READ_FILE: Missing/invalid 'filepath' or 'path' (string).")
-                # Standardize to 'path' internally for execution if 'filepath' was used
-                llm_decision['path'] = file_path
-                # *** MODIFIED BLOCK END ***
+                # *** UPDATED BLOCK START ***
+                # Check for 'filepath', 'file_path', then 'path' to handle inconsistency
+                file_path_value = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path"))) # <-- Check all three
+                if not isinstance(file_path_value, str) or not file_path_value:
+                    raise ValueError("READ_FILE: Missing/invalid 'filepath', 'file_path', or 'path' (string).") # <-- Updated error message
+                # Standardize to 'path' internally for execution
+                llm_decision['path'] = file_path_value # <-- Use the found value
+                # *** UPDATED BLOCK END ***
             elif action_type == "REQUEST_RESTART":
                 if not isinstance(llm_decision.get("reasoning"), str) or not llm_decision.get("reasoning"): raise ValueError("REQUEST_RESTART: Missing 'reasoning' (string).")
             elif action_type == "UPDATE_GOAL":
@@ -570,18 +629,23 @@ class Seed_Core:
             elif action_type == "ANALYZE_MEMORY":
                 if not isinstance(llm_decision.get("query"), str) or not llm_decision.get("query"): raise ValueError("ANALYZE_MEMORY: Missing/invalid 'query' (string).")
             elif action_type == "MODIFY_CORE_CODE":
-                if not isinstance(llm_decision.get("file_path"), str) or not llm_decision["file_path"]: raise ValueError("MODIFY_CORE_CODE: Missing/invalid 'file_path'.")
+                # Use the same 3-key check for file path
+                file_path_mod = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
+                if not isinstance(file_path_mod, str) or not file_path_mod: raise ValueError("MODIFY_CORE_CODE: Missing/invalid 'filepath', 'file_path', or 'path'.")
+                llm_decision['file_path'] = file_path_mod # Standardize to file_path for execution logic consistency
+
                 allowed_mod_types = ["REPLACE_LINE", "INSERT_AFTER_LINE", "DELETE_LINE"]
                 if llm_decision.get("modification_type") not in allowed_mod_types: raise ValueError(f"MODIFY_CORE_CODE: Invalid 'modification_type'. Allowed: {allowed_mod_types}.")
                 if not isinstance(llm_decision.get("target_line_content"), str): raise ValueError("MODIFY_CORE_CODE: Missing/invalid 'target_line_content' (string).")
-                # new_content required unless deleting
                 if llm_decision.get("modification_type") != "DELETE_LINE" and "new_content" not in llm_decision: raise ValueError("MODIFY_CORE_CODE: Missing 'new_content' for non-delete operations.")
-                # Check for verification hash (optional but recommended)
                 if "verification_hash" not in llm_decision: logger.warning(f"Seed [{cycle_id}]: MODIFY_CORE_CODE action proposed without 'verification_hash'. Applying may be unsafe.")
                 elif not isinstance(llm_decision["verification_hash"], str) or len(llm_decision["verification_hash"]) < 8: logger.warning(f"Seed [{cycle_id}]: MODIFY_CORE_CODE has potentially invalid 'verification_hash'.")
 
             elif action_type == "TEST_CORE_CODE_MODIFICATION":
-                if not isinstance(llm_decision.get("file_path"), str) or not llm_decision["file_path"]: raise ValueError("TEST_CORE_CODE_MODIFICATION: Missing/invalid 'file_path'.")
+                file_path_test = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
+                if not isinstance(file_path_test, str) or not file_path_test: raise ValueError("TEST_CORE_CODE_MODIFICATION: Missing/invalid 'filepath', 'file_path', or 'path'.")
+                llm_decision['file_path'] = file_path_test # Standardize
+
                 allowed_test_types = ["REPLACE_FUNCTION", "REPLACE_METHOD"]
                 if llm_decision.get("modification_type") not in allowed_test_types: raise ValueError(f"TEST_CORE_CODE_MODIFICATION: Invalid 'modification_type'. Allowed: {allowed_test_types}.")
                 if not isinstance(llm_decision.get("target_name"), str) or not llm_decision["target_name"]: raise ValueError("TEST_CORE_CODE_MODIFICATION: Missing/invalid 'target_name' (string).")
@@ -595,10 +659,12 @@ class Seed_Core:
                 if "return_value" not in expected_outcome and not expected_outcome.get("expect_exception"): raise ValueError("TEST_CORE_CODE_MODIFICATION: 'expected_outcome' must contain 'return_value' or set 'expect_exception:true'.")
                 if expected_outcome.get("mock_calls") and not isinstance(expected_outcome["mock_calls"], dict): raise ValueError("TEST_CORE_CODE_MODIFICATION: Invalid 'mock_calls' (dict) in 'expected_outcome'.")
             elif action_type == "VERIFY_CORE_CODE_CHANGE":
-                if not isinstance(llm_decision.get("file_path"), str) or not llm_decision["file_path"]: raise ValueError("VERIFY_CORE_CODE_CHANGE: Missing/invalid 'file_path'.")
+                file_path_verify = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
+                if not isinstance(file_path_verify, str) or not file_path_verify: raise ValueError("VERIFY_CORE_CODE_CHANGE: Missing/invalid 'filepath', 'file_path', or 'path'.")
+                llm_decision['file_path'] = file_path_verify # Standardize
+
                 mod_type_v = llm_decision.get("modification_type"); allowed_v_types = ["REPLACE_LINE", "INSERT_AFTER_LINE", "DELETE_LINE", "REPLACE_FUNCTION", "REPLACE_METHOD"]
                 if mod_type_v not in allowed_v_types: raise ValueError(f"VERIFY_CORE_CODE_CHANGE: Invalid 'modification_type'. Allowed: {allowed_v_types}.")
-                # Validate target/content based on type
                 if mod_type_v in ["REPLACE_FUNCTION", "REPLACE_METHOD"]:
                     if not isinstance(llm_decision.get("target_name"), str) or not llm_decision["target_name"]: raise ValueError("VERIFY_CORE_CODE_CHANGE: 'target_name' (string) required for function/method replacement.")
                     if "new_logic" not in llm_decision or not isinstance(llm_decision["new_logic"], str): raise ValueError("VERIFY_CORE_CODE_CHANGE: 'new_logic' (string) required for function/method replacement.")
@@ -610,19 +676,16 @@ class Seed_Core:
             elif action_type=="UPDATE_LEARNING_PARAMETER":
                  if not isinstance(llm_decision.get("parameter_name"), str) or not llm_decision["parameter_name"]: raise ValueError("UPDATE_LEARNING_PARAMETER: Missing/invalid 'parameter_name' (string).")
                  if "new_value" not in llm_decision: raise ValueError("UPDATE_LEARNING_PARAMETER: Missing 'new_value'.")
-                 # Further type/bounds validation happens in MemorySystem.update_learning_parameter
             elif action_type=="INDUCE_BEHAVIORAL_RULE":
                  if not isinstance(llm_decision.get("trigger_pattern"), dict): raise ValueError("INDUCE_BEHAVIORAL_RULE: Missing/invalid 'trigger_pattern' (dict).")
                  if not isinstance(llm_decision.get("suggested_response"), str) or not llm_decision["suggested_response"]: raise ValueError("INDUCE_BEHAVIORAL_RULE: Missing/invalid 'suggested_response' (string).")
                  if "rule_id" in llm_decision and (not isinstance(llm_decision["rule_id"], str) or not llm_decision["rule_id"].strip()): raise ValueError("INDUCE_BEHAVIORAL_RULE: Optional 'rule_id' must be a non-empty string if provided.")
 
-            # If all checks pass for the specific action_type
             return llm_decision
 
         except (json.JSONDecodeError, ValueError, TypeError) as err:
             logger.error(f"Seed [{cycle_id}] LLM response validation failed: {err}. Raw: '{llm_response_raw[:500]}...'")
             self.memory.log("SEED_LLMError", {"cycle":cycle_id, "stage":"ActionValidation", "error":f"{err}", "raw_snippet":llm_response_raw[:500]}, tags=['Seed','LLM','Error','Action'])
-            # Return a dictionary indicating fallback is needed
             return {"action_type": "FALLBACK", "reasoning": f"LLM action validation failed ({err})"}
 
 
@@ -657,15 +720,12 @@ class Seed_Core:
                  analysis_prompt=action_params.get("analysis_prompt","Summarize relevance to current goal and recent errors.") # Default prompt
                  logger.info(f"Seed Analyze Mem Query: '{query}'")
                  if query and isinstance(query, str):
-                    # Retrieve context (includes learning state now)
                     mem_context = self.memory.retrieve_context(query=query, limit=10)
-                    # Simplify context for LLM prompt (avoid sending full episodic/rules unless necessary)
                     ctx_for_llm = {k:v for k,v in mem_context.items() if k not in ['recent_episodic', 'current_behavioral_rules']}
                     ctx_for_llm['rule_count'] = len(mem_context.get('current_behavioral_rules', {}))
-                    # Fetch current LLM temperature
                     llm_temp = self.memory.get_learning_parameter('llm_query_temperature.value') or 0.5
                     llm_mem_prompt = f"Context: Based on the memory search results for query '{query}', perform the following analysis:\n{analysis_prompt}\n\nMemory Context (Limited):\n```json\n{json.dumps(ctx_for_llm, default=str, indent=2)}\n```\n\nProvide only the analysis result."
-                    analysis = self.llm_service.query(llm_mem_prompt, max_tokens=500, temperature=llm_temp) # Use configured temp
+                    analysis = self.llm_service.query(llm_mem_prompt, max_tokens=500, temperature=llm_temp)
                     exec_res={"success":True,"message":"Memory analysis complete.", "details":{"query":query, "analysis_result": analysis, "retrieved_context_info": f"Ep:{len(mem_context.get('recent_episodic',[]))} Text:{len(mem_context.get('text_search_results',[]))} Vec:{len(mem_context.get('vector_search_results',[]))} Rules:{ctx_for_llm['rule_count']}"}}
                     self.memory.log(f"SEED_MemAnalysis_{cycle_id}", {"query": query, "analysis": analysis}, tags=['Seed','Memory'])
                  else:
@@ -681,7 +741,6 @@ class Seed_Core:
             elif action_type == "MODIFY_CORE_CODE":
                 if not ENABLE_CORE_CODE_MODIFICATION: exec_res = {"success": False, "message": "Core code modification is disabled in config."}; log_tags.append('Safety')
                 else:
-                    # Get verification hash provided by LLM
                     verification_hash = action_params.get("verification_hash")
                     if not verification_hash or not isinstance(verification_hash, str):
                          exec_res = {"success": False, "message": "Modification rejected: Missing or invalid 'verification_hash' parameter."}; log_tags.extend(['Error', 'Safety', 'Verification']); logger.warning(f"Core code modification REJECTED: Missing verification_hash.")
@@ -691,7 +750,6 @@ class Seed_Core:
                              age = time.time() - verification_record['timestamp'];
                              if age < self._verified_mod_expiry_sec:
                                  if verification_record.get('result',{}).get('success'):
-                                      # Double-check the params hash matches too (should always if hash lookup works, but belt-and-suspenders)
                                       if verification_record.get('params_hash') == verification_hash:
                                            is_verified = True; verification_reason = "Verification passed."
                                       else:
@@ -703,6 +761,7 @@ class Seed_Core:
 
                          if is_verified:
                              logger.info(f"Verification check passed for hash {verification_hash[:8]}. Proceeding with core modification.");
+                             # Pass file_path standardized during validation
                              exec_res = self._execute_modify_core_code(action_params, cycle_id); log_tags.append('CoreMod')
                          else:
                              exec_res = {"success": False, "message": f"Core code modification rejected: {verification_reason}"}; log_tags.extend(['Error', 'Safety', 'Verification']);
@@ -717,11 +776,10 @@ class Seed_Core:
                  # Use the 'path' standardized during validation
                  path = action_params.get("path"); content = action_params.get("content"); logger.info(f"Seed Writing to file: '{path}' (Content type: {type(content).__name__})")
                  if path and isinstance(path, str) and content is not None:
-                      # Ensure content is string for VM service file write
                       content_str = str(content) if not isinstance(content, str) else content
                       write_res = self.vm_service.write_file(path, content_str); exec_res = write_res if isinstance(write_res, dict) else {"success": False, "message": "Invalid response from vm_service.write_file"}; exec_res['reason'] = write_res.get('reason')
                  else: exec_res={"success": False, "message": "Requires 'path' (string) and 'content'."}; log_tags.append('Error'); exec_res['reason'] = 'invalid_argument'
-                 if not exec_res.get("success", True): log_tags.append('Error') # Log error tag if write failed
+                 if not exec_res.get("success", True): log_tags.append('Error')
             elif action_type == "REQUEST_RESTART":
                 reason = action_params.get("reasoning", "No reason provided.")
                 logger.warning(f"Seed requesting self-restart. Reason: {reason}");
@@ -736,29 +794,28 @@ class Seed_Core:
                  new_value = action_params.get("new_value")
                  logger.info(f"Seed attempting update learning parameter '{param_name}' to {new_value}")
                  if param_name and new_value is not None:
-                      # Use memory system to handle validation, update, and save
                       success = self.memory.update_learning_parameter(param_name, new_value)
                       exec_res = {"success": success, "message": f"Learning parameter '{param_name}' update {'succeeded' if success else 'failed or rejected'}."}
-                      if success: log_tags.append('Parameter'); log_tags.append('Learning')
+                      if success: log_tags.extend(['Parameter', 'Learning'])
                       else: log_tags.append('Error')
                  else:
                       exec_res = {"success": False, "message": "Missing 'parameter_name' or 'new_value'."}; log_tags.append('Error')
             elif action_type == "INDUCE_BEHAVIORAL_RULE":
                  trigger = action_params.get("trigger_pattern")
                  suggestion = action_params.get("suggested_response")
-                 rule_id_in = action_params.get("rule_id") # Optional input ID
+                 rule_id_in = action_params.get("rule_id")
                  logger.info(f"Seed inducing behavioral rule. Suggestion: {suggestion}")
                  if trigger and suggestion:
                       rule_data_to_add = {
                            "trigger_pattern": trigger,
                            "suggested_response": suggestion,
-                           "rule_id": rule_id_in, # Pass optional ID
-                           "reasoning": action_params.get("reasoning") # Include LLM reasoning
+                           "rule_id": rule_id_in,
+                           "reasoning": action_params.get("reasoning")
                       }
                       rule_id_out = self.memory.add_behavioral_rule(rule_data_to_add)
                       if rule_id_out:
                            exec_res = {"success": True, "message": f"Behavioral rule '{rule_id_out}' added/updated.", "details": {"rule_id": rule_id_out}}
-                           log_tags.append('RuleInduction'); log_tags.append('Learning')
+                           log_tags.extend(['RuleInduction', 'Learning'])
                       else:
                            exec_res = {"success": False, "message": "Failed to add behavioral rule (validation failed?)."}
                            log_tags.append('Error')
@@ -769,29 +826,26 @@ class Seed_Core:
             else:
                 logger.error(f"Seed [{cycle_id}]: Unknown action type '{action_type}'."); exec_res['message']=f"Unknown action type '{action_type}'"; log_tags.append('Error')
 
-            # Log final success/failure tag based on execution result
             if exec_res.get("success"):
                 if "Success" not in log_tags: log_tags.append("Success")
-                if "Error" in log_tags: log_tags.remove("Error") # Remove error if success is true
+                if "Error" in log_tags: log_tags.remove("Error")
             elif "Error" not in log_tags:
-                 log_tags.append("Error") # Ensure error tag if not successful
+                 log_tags.append("Error")
 
-            # Add result message and reason to log data
             log_data["result_msg"] = exec_res.get("message");
-            log_data["result_reason"] = exec_res.get("reason") # Include reason if available from VMService etc.
-            self.memory.log(f"SEED_Action_{action_type}", log_data, tags=list(set(log_tags))) # Ensure unique tags
+            log_data["result_reason"] = exec_res.get("reason")
+            self.memory.log(f"SEED_Action_{action_type}", log_data, tags=list(set(log_tags)))
 
         except Exception as action_exec_error:
             logger.critical(f"Seed CRITICAL Action Exec Error '{action_type}': {action_exec_error}", exc_info=True);
             exec_res = {"success": False, "message": f"Exec Exception: {action_exec_error}", "traceback": traceback.format_exc(), "reason": "internal_error"};
             log_tags.extend(['CriticalError', 'Error']);
-            log_tags = list(set(log_tags)) # Remove duplicates
+            log_tags = list(set(log_tags))
             if "Success" in log_tags: log_tags.remove("Success")
             log_data["result_msg"] = exec_res["message"];
             log_data["result_reason"] = exec_res.get("reason")
             self.memory.log(f"SEED_Action_{action_type}", log_data, tags=log_tags)
 
-        # Add duration to the details sub-dictionary if it exists, otherwise create it
         if 'details' not in exec_res: exec_res['details'] = {}
         exec_res['details']['seed_action_duration_sec'] = round(time.time() - start_time, 2)
         return exec_res
@@ -799,8 +853,9 @@ class Seed_Core:
 
     # --- Core Code Modification Helpers ---
     def _execute_modify_core_code(self, action_params: Dict, cycle_id: str) -> ActionResult:
-        """ Applies a previously verified core code modification. """
-        file_rel_path = action_params.get("file_path"); mod_type = action_params.get("modification_type"); target_line = action_params.get("target_line_content"); new_content = action_params.get("new_content", "") # Default for delete
+        """ Applies a previously verified core code modification. Uses standardized 'file_path'. """
+        # Use standardized 'file_path' from validation step
+        file_rel_path = action_params.get("file_path"); mod_type = action_params.get("modification_type"); target_line = action_params.get("target_line_content"); new_content = action_params.get("new_content", "")
         result: ActionResult = {"success": False, "message": "Modification failed.", "details": {}, "reason": "unknown"}
         logger.warning(f"Applying VERIFIED CORE CODE MODIFICATION: File='{file_rel_path}', Type='{mod_type}'")
         try:
@@ -810,7 +865,6 @@ class Seed_Core:
             if mod_type != "DELETE_LINE" and new_content is None: raise ValueError(f"Missing 'new_content' for {mod_type}.")
             if mod_type in ["REPLACE_LINE", "INSERT_AFTER_LINE", "DELETE_LINE"] and not target_line: raise ValueError(f"Missing 'target_line_content' for {mod_type}.")
 
-            # Resolve and validate path against project root and allowed dirs/files
             full_path = self.project_root.joinpath(file_rel_path).resolve()
             if not full_path.is_relative_to(self.project_root): raise PermissionError("Target path outside project root.")
             relative_to_root = full_path.relative_to(self.project_root)
@@ -823,19 +877,16 @@ class Seed_Core:
             with open(full_path, 'r', encoding='utf-8') as f_read: original_lines = f_read.readlines()
 
             # --- Apply Modification Logic ---
-            target_indices = [i for i, line in enumerate(original_lines) if target_line.strip() in line.strip()] # Match stripped content
+            target_indices = [i for i, line in enumerate(original_lines) if target_line.strip() in line.strip()]
             if not target_indices: result['reason'] = 'target_not_found'; raise ValueError(f"Target line content not found: '{target_line[:100]}...'")
-            if len(target_indices) > 1: result['reason'] = 'target_ambiguous'; logger.warning(f"Target line content ambiguous ({len(target_indices)} matches) in '{full_path}'. Using first match for APPLY."); # Proceed with first match? Risky. Raise error instead?
+            if len(target_indices) > 1: result['reason'] = 'target_ambiguous'; logger.warning(f"Target line content ambiguous ({len(target_indices)} matches) in '{full_path}'. Using first match for APPLY.");
             target_idx = target_indices[0]; modified_lines = original_lines[:]
 
             if mod_type == "REPLACE_LINE":
                  modified_lines[target_idx] = new_content + ('\n' if not new_content.endswith('\n') else '')
             elif mod_type == "INSERT_AFTER_LINE":
-                # Preserve indentation of the target line for the inserted lines
                 indent = re.match(r"^\s*", original_lines[target_idx]).group(0) if target_idx < len(original_lines) else ""
-                # Split new content by lines, preserve endings, add indent
                 lines_to_insert = [(indent + line) for line in new_content.splitlines(True)]
-                # Ensure last line has newline if original did, or add if needed
                 if lines_to_insert and not lines_to_insert[-1].endswith('\n'): lines_to_insert[-1] += '\n'
                 modified_lines[target_idx+1:target_idx+1] = lines_to_insert
             elif mod_type == "DELETE_LINE":
@@ -865,7 +916,6 @@ class Seed_Core:
                  result['reason'] = 'write_error'; raise IOError(f"Error writing modified file or backup: {write_err}") from write_err
 
         except (FileNotFoundError, ValueError, IOError, PermissionError, Exception) as err:
-            # Reason should be set within the try block where possible
             result['message'] = f"Core Code Apply Error: {err}"
             result['details'] = result.get('details', {})
             result['details']["error_type"] = type(err).__name__
@@ -874,10 +924,11 @@ class Seed_Core:
         return result
 
     def _execute_test_core_code_modification(self, action_params: Dict, cycle_id: str, current_depth: int) -> ActionResult:
-        """ Executes an isolated test of proposed new code logic. """
+        """ Executes an isolated test of proposed new code logic. Uses standardized 'file_path'. """
+        # Use standardized 'file_path'
         file_rel_path = action_params.get("file_path"); mod_type = action_params.get("modification_type"); target_name = action_params.get("target_name"); new_logic = action_params.get("new_logic"); test_scenario = action_params.get("test_scenario")
         result: ActionResult = {"success": False, "message": "Test failed.", "details": {}, "reason": "unknown"}
-        result['details']['params'] = {k:v for k,v in action_params.items() if k != 'new_logic'} # Log params except the code itself
+        result['details']['params'] = {k:v for k,v in action_params.items() if k != 'new_logic'}
         logger.info(f"Executing CORE CODE TEST: File='{file_rel_path}', Target='{target_name}'")
 
         try: # --- Path Validation ---
@@ -887,7 +938,7 @@ class Seed_Core:
             relative_to_root = full_path.relative_to(self.project_root)
             if not any(relative_to_root.is_relative_to(allowed) for allowed in CORE_CODE_MODIFICATION_ALLOWED_DIRS): raise PermissionError(f"Target path not in allowed test/modification dirs: {CORE_CODE_MODIFICATION_ALLOWED_DIRS}")
             if full_path.name in CORE_CODE_MODIFICATION_DISALLOWED_FILES: raise PermissionError(f"Testing involving file '{full_path.name}' disallowed.")
-            if not full_path.is_file(): logger.warning(f"Core Code Test: Target file '{full_path}' not found, testing logic in isolation.") # File existence not strictly required for isolated test
+            if not full_path.is_file(): logger.warning(f"Core Code Test: Target file '{full_path}' not found, testing logic in isolation.")
             result['details']['validated_path'] = str(full_path)
         except (ValueError, PermissionError, Exception) as path_err:
             result['message'] = f"Path/Permission Error for Test: {path_err}"; result['reason'] = 'path_permission_error'; logger.error(f"Core Code Test Failed (Path/Perm): {path_err}"); return result
@@ -901,7 +952,7 @@ class Seed_Core:
             sandbox_result = {"output": None, "error": None, "success": False, "message": "", "raw_output": None, "mock_calls": {}, "evaluation_details": {}}
             func_handle = None; mock_self_instance = None; mock_services_dict = {};
             expected_outcome = test_scenario.get("expected_outcome", {})
-            test_inputs = test_scenario.get('test_inputs', []); prepared_args = copy.deepcopy(test_inputs); # Deep copy inputs
+            test_inputs = test_scenario.get('test_inputs', []); prepared_args = copy.deepcopy(test_inputs);
 
             try:
                 # --- Validate New Logic Syntax ---
@@ -909,34 +960,26 @@ class Seed_Core:
                 parsed_ast = ast.parse(new_logic, filename="<new_logic>"); defined_name = None
                 if parsed_ast.body and isinstance(parsed_ast.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)): defined_name = parsed_ast.body[0].name
                 if not defined_name: raise SyntaxError("Provided new_logic does not define a top-level function/method.")
-                expected_func_name = target_name # For isolated test, target_name *is* the function name
-                # Simple check if target_name implies method based on context (e.g., if _execute provided it)
-                # Or rely on modification_type?
+                expected_func_name = target_name
                 is_method = (mod_type == "REPLACE_METHOD")
-
                 if defined_name != expected_func_name: raise SyntaxError(f"Logic defines '{defined_name}' but target was '{expected_func_name}'.")
 
                 # --- Setup Scope and Mocks ---
                 logger.debug("Sandbox: Setting up scope and mocks...");
-                isolated_globals = SAFE_EXEC_GLOBALS.copy(); # Use carefully curated globals
-                isolated_locals = {}; # Locals for the exec call
+                isolated_globals = SAFE_EXEC_GLOBALS.copy();
+                isolated_locals = {};
                 test_logger = logging.getLogger(f"CoreCodeTestSandbox.{target_name}");
-                isolated_globals['logger'] = test_logger; # Make logger available if needed
-                isolated_globals['MockSelf'] = MockSelf # Allow creating mock instances within exec'd code if needed
+                isolated_globals['logger'] = test_logger;
+                isolated_globals['MockSelf'] = MockSelf
 
-                # Create mock services based on test scenario
-                mock_services_config = expected_outcome.get('mock_services', {}) # Define mocks needed in scenario
+                mock_services_config = expected_outcome.get('mock_services', {})
                 mock_services_dict['memory'] = MockMemorySystem(return_values=mock_services_config.get('memory'))
                 mock_services_dict['llm_service'] = MockLLMService(return_values=mock_services_config.get('llm_service'))
                 mock_services_dict['vm_service'] = MockVMService(return_values=mock_services_config.get('vm_service'))
-                # Add mocks to globals so the tested function can potentially access them if needed (though ideally passed via self)
-                # This might be risky if the function uses globals heavily instead of 'self'
-                # isolated_globals.update(mock_services_dict)
 
                 if is_method:
                     logger.debug("Sandbox: Creating MockSelf instance with mocks...");
                     mock_self_instance = MockSelf(mock_services=mock_services_dict)
-                    # Add self to prepared args as the first argument
                     prepared_args.insert(0, mock_self_instance)
                     logger.debug(f"Sandbox: Prepared method call for '{defined_name}' with {len(test_inputs)} user args (+ mock self)...")
                 else:
@@ -977,57 +1020,52 @@ class Seed_Core:
                         if 'return_value' in expected_outcome:
                             expected_return = expected_outcome['return_value'];
                             if expected_return == "ANY": eval_msgs.append("PASSED: Return value check skipped (ANY).")
-                            # Use robust comparison (repr might be better for complex objects)
                             elif repr(actual_output) == repr(expected_return): eval_msgs.append(f"PASSED: Return value matched.")
                             else: passed = False; eval_msgs.append(f"FAILED: Return value mismatch. Got: {repr(actual_output)[:100]}... Exp: {repr(expected_return)[:100]}...")
-                        try: sandbox_result['output'] = json.loads(json.dumps(actual_output, default=str)) # Attempt to make JSON serializable
-                        except Exception: sandbox_result['output'] = repr(actual_output) # Fallback to repr
+                        try: sandbox_result['output'] = json.loads(json.dumps(actual_output, default=str))
+                        except Exception: sandbox_result['output'] = repr(actual_output)
 
                 # --- Evaluate Mock Calls ---
                 expected_calls = expected_outcome.get('mock_calls', {}); actual_calls_all = {}; evaluation_mock_details = {}
-                for service_name, mock_instance in mock_services_dict.items(): actual_calls_all[service_name] = mock_instance.get_calls() # Get calls from actual mocks used
+                for service_name, mock_instance in mock_services_dict.items(): actual_calls_all[service_name] = mock_instance.get_calls()
 
                 for service_name, expected_methods in expected_calls.items():
                     evaluation_mock_details[service_name] = {}; actual_service_calls = actual_calls_all.get(service_name, {});
                     if not isinstance(expected_methods, dict): passed = False; eval_msgs.append(f"FAILED: Invalid expected_calls structure for service '{service_name}'."); continue
                     for method_name, expected_call_list in expected_methods.items():
                         actual_method_calls = actual_service_calls.get(method_name, []); actual_count = len(actual_method_calls)
-                        if not isinstance(expected_call_list, list): # Allow int for count check, or list for arg check
-                            if isinstance(expected_call_list, int): # Just check count
+                        if not isinstance(expected_call_list, list):
+                            if isinstance(expected_call_list, int):
                                 expected_count = expected_call_list
                                 if actual_count == expected_count: eval_msgs.append(f"PASSED: Mock call count matched for {service_name}.{method_name} ({expected_count})."); evaluation_mock_details[service_name][method_name] = {"expected_count": expected_count, "actual_count": actual_count, "match": True}
                                 else: passed = False; eval_msgs.append(f"FAILED: Mock call count mismatch for {service_name}.{method_name} (Exp {expected_count}, Got {actual_count})."); evaluation_mock_details[service_name][method_name] = {"expected_count": expected_count, "actual_count": actual_count, "match": False}
                             else: passed = False; eval_msgs.append(f"FAILED: Invalid expected_calls value for '{service_name}.{method_name}'. Must be list or int."); evaluation_mock_details[service_name][method_name] = {"error": "Invalid expectation type"}
-                        else: # Check specific args/kwargs for each call
+                        else:
                             expected_count = len(expected_call_list); evaluation_mock_details[service_name][method_name] = {"expected": expected_count, "actual": actual_count, "match": False, "details": []}
                             if actual_count != expected_count: passed = False; eval_msgs.append(f"FAILED: Mock call count mismatch for {service_name}.{method_name} (Exp {expected_count}, Got {actual_count})."); evaluation_mock_details[service_name][method_name]["details"].append("Call count mismatch."); continue
                             calls_match = True
                             for i, (expected_call, actual_call) in enumerate(zip(expected_call_list, actual_method_calls)):
                                 if not isinstance(expected_call, dict): calls_match = False; eval_msgs.append(f"FAILED: Invalid expected call structure {i} for {service_name}.{method_name}."); break
-                                # Use deep comparison for args/kwargs if they are complex structures
                                 expected_args = expected_call.get('args', "ANY"); expected_kwargs = expected_call.get('kwargs', "ANY");
                                 actual_args = actual_call.get('args', []); actual_kwargs = actual_call.get('kwargs', {});
-                                args_match = (expected_args == "ANY" or expected_args == actual_args) # Simple comparison okay for basic types
+                                args_match = (expected_args == "ANY" or expected_args == actual_args)
                                 kwargs_match = (expected_kwargs == "ANY" or expected_kwargs == actual_kwargs)
-                                # TODO: Implement deep compare if needed: args_match = (expected_args == "ANY" or deep_compare(expected_args, actual_args))
                                 if not args_match or not kwargs_match: calls_match = False; mismatch_detail = f"Arg mismatch call {i+1}. Exp: args={expected_args}, kwargs={expected_kwargs}. Act: args={actual_args}, kwargs={actual_kwargs}"; eval_msgs.append(f"FAILED: Mock call {mismatch_detail} for {service_name}.{method_name}."); evaluation_mock_details[service_name][method_name]["details"].append(mismatch_detail); break
                             if calls_match and expected_call_list: evaluation_mock_details[service_name][method_name]["match"] = True; eval_msgs.append(f"PASSED: Mock calls matched for {service_name}.{method_name}.")
-                            elif not calls_match: passed = False # Already logged failure msg
+                            elif not calls_match: passed = False
 
-                # Check for unexpected calls
                 for service_name, actual_methods in actual_calls_all.items():
                      if service_name not in expected_calls:
                           if actual_methods: passed=False; eval_msgs.append(f"FAILED: Unexpected calls to service '{service_name}'. Details: {actual_methods}");
                           if service_name not in evaluation_mock_details: evaluation_mock_details[service_name] = {}
                           evaluation_mock_details[service_name]["__UNEXPECTED__"] = actual_methods
-                     elif isinstance(expected_calls.get(service_name), dict): # Only check if detailed expectations exist
+                     elif isinstance(expected_calls.get(service_name), dict):
                           for method_name, calls in actual_methods.items():
                               if method_name not in expected_calls[service_name]:
                                    if calls: passed=False; eval_msgs.append(f"FAILED: Unexpected calls to method '{service_name}.{method_name}'. Details: {calls}");
                                    if service_name not in evaluation_mock_details: evaluation_mock_details[service_name] = {}
                                    if method_name not in evaluation_mock_details[service_name]: evaluation_mock_details[service_name][method_name] = {}
                                    evaluation_mock_details[service_name][method_name]["__UNEXPECTED__"] = calls
-
 
                 sandbox_result['success'] = passed; sandbox_result['message'] = "; ".join(eval_msgs); sandbox_result['mock_calls'] = actual_calls_all; sandbox_result['evaluation_details'] = evaluation_mock_details
 
@@ -1039,7 +1077,7 @@ class Seed_Core:
         # --- Thread Execution and Timeout ---
         result_queue = queue.Queue();
         test_thread = threading.Thread(target=_run_test_in_sandbox, args=(result_queue,))
-        test_thread.daemon = True # Allow main thread to exit even if this hangs badly
+        test_thread.daemon = True
         test_thread.start()
         timeout_ms = test_scenario.get('max_test_duration_ms', CORE_CODE_TEST_DEFAULT_TIMEOUT_MS)
         timeout_sec = timeout_ms / 1000.0
@@ -1047,7 +1085,6 @@ class Seed_Core:
 
         if test_thread.is_alive():
             result['success'] = False; result['message'] = f"Test failed: Timed out after {timeout_sec:.1f} seconds."; result['details']['timed_out'] = True; result['reason'] = 'timeout'; logger.warning(f"Core Code Test TIMED OUT for target '{target_name}'.")
-            # Note: Cannot easily kill the thread, it might keep running.
         else:
             try: sandbox_result = result_queue.get_nowait();
             except queue.Empty: sandbox_result = {"success": False, "message": "Test failed: Result queue empty after thread join.", "error":"QueueEmpty", "evaluation_details":{}}
@@ -1055,18 +1092,19 @@ class Seed_Core:
 
             result['success'] = sandbox_result.get('success', False);
             result['message'] = sandbox_result.get('message', 'Test completed, result format invalid.');
-            result['details'].update(sandbox_result); # Add sandbox output, error, mocks, etc.
+            result['details'].update(sandbox_result);
             result['details']['timed_out'] = False
             result['reason'] = 'test_passed' if result['success'] else 'test_failed'
 
         return result
 
     def _execute_verify_core_code_change(self, action_params: Dict, cycle_id: str) -> ActionResult:
-        """ Executes an external verification suite against a proposed code change. """
+        """ Executes an external verification suite against a proposed code change. Uses standardized 'file_path'. """
         result: ActionResult = {"success": False, "message": "Verification failed.", "details": {}, "reason": "unknown"}
         result['details']['params'] = {k:v for k,v in action_params.items() if k not in ['new_logic', 'new_content']}
+        # Use standardized 'file_path'
         file_rel_path = action_params.get("file_path")
-        mod_hash = self._hash_modification_params(action_params) # Hash includes the code change
+        mod_hash = self._hash_modification_params(action_params)
         verification_level = action_params.get("verification_level", "basic")
         logger.info(f"Executing CORE CODE VERIFICATION: File='{file_rel_path}', Hash='{mod_hash[:8]}...', Level='{verification_level}'")
 
@@ -1083,25 +1121,21 @@ class Seed_Core:
             result['message'] = f"Path/Permission Error for Verification: {path_err}"; result['reason'] = 'path_permission_error'; logger.error(f"Core Code Verification Failed (Path/Perm): {path_err}"); return result
 
         try: # --- Call External Verification Function ---
-            # This function needs to handle temp env creation, modification, test execution, cleanup
             verify_success, verify_message, verify_details = run_verification_suite(
                 project_root=self.project_root,
-                modification_params=action_params, # Pass the full params dict
+                modification_params=action_params,
                 verification_level=verification_level
             )
             result['success'] = verify_success; result['message'] = verify_message; result['details'].update(verify_details)
             result['reason'] = 'verify_passed' if verify_success else 'verify_failed'
 
-            # Store verification result regardless of success/fail
-            # Use hash of *input* params as the key
             self._verified_code_mods[mod_hash] = {
                 "timestamp": time.time(),
                 "result": {"success": verify_success, "message": verify_message},
-                "params": copy.deepcopy(result['details']['params']), # Store params used for verification
-                "params_hash": mod_hash # Store hash for easy lookup on apply
+                "params": copy.deepcopy(result['details']['params']),
+                "params_hash": mod_hash
             }
             logger.info(f"Stored verification record for mod hash {mod_hash[:8]} (Success: {verify_success})")
-            # TODO: Implement cleanup of old verification records (e.g., on startup or periodically)
 
         except Exception as verify_err:
             result['success'] = False; result['message'] = f"Error during verification process call: {verify_err}"; result['details']["error"] = traceback.format_exc(); result['reason'] = 'verify_error'; logger.error(f"Core Code Verification FAILED (Execution): {verify_err}", exc_info=True)
@@ -1109,14 +1143,14 @@ class Seed_Core:
         return result
 
     def _hash_modification_params(self, action_params: Dict) -> str:
-        """ Creates a consistent hash for modification parameters, including the code change itself. """
+        """ Creates a consistent hash for modification parameters, including the code change itself. Uses standardized 'file_path'. """
         hash_content = {}
+        # Standardize path key for hashing consistency
+        path_key = "file_path" # Use the standardized key
         # Include all parameters relevant to defining the change uniquely
-        # Order might matter if not sorted, but keys should be consistent
-        keys_to_hash = ["file_path", "modification_type", "target_name", "target_line_content", "new_logic", "new_content"]
-        for key in sorted(keys_to_hash): # Sort keys for deterministic hash
+        keys_to_hash = [path_key, "modification_type", "target_name", "target_line_content", "new_logic", "new_content"]
+        for key in sorted(keys_to_hash):
             if key in action_params: hash_content[key] = action_params[key]
-        # Use sort_keys for deterministic JSON string
         content_str = json.dumps(hash_content, sort_keys=True)
         return hashlib.sha256(content_str.encode('utf-8')).hexdigest()
 
@@ -1124,12 +1158,9 @@ class Seed_Core:
     def _get_fallback_action(self, reason: str) -> Dict:
         """ Generates a predefined fallback action (e.g., ANALYZE_MEMORY or NO_OP). """
         logger.warning(f"Seed Fallback triggered: {reason}.")
-        # Avoid analysis loop if fallback reason itself mentions analysis failure
         if "analyze" in reason.lower() or "fallback" in reason.lower():
-             # If analysis fails repeatedly, maybe NO_OP is safer
              return {"action_type": "NO_OP", "reasoning": f"Fallback Action (NO_OP): Previous fallback or analysis failed. Reason: {reason}."}
         else:
-             # Default fallback is to analyze memory
              return {"action_type": "ANALYZE_MEMORY", "query": f"Analyze state and recent failures given fallback reason: {reason}", "reasoning": f"Fallback Action: {reason}. Analyzing memory to understand context."}
 
 # --- END OF FILE seed/core.py ---

@@ -1,22 +1,23 @@
-# Python Virtual Environment
+# Memory / State Files
+*.pkl
+*_restart_state.pkl
+
+# Python virtual environment
 .venv/
 venv/
-*/__pycache__/
-*.pyc
-*.pyo
 
-# Memory State & Backups
-*.pkl
-_core_backups/
-_core_verify_temp*/
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Environment variables
-.env
-
-# IDE specific folders
+# IDE / OS specific
 .idea/
 .vscode/
+__pycache__/
+*.pyc
+*.pyo
+.DS_Store
+
+# Log files
+*.log
+
+# Other potentially unwanted files
+notes.txt
+_core_backups/
+_core_verify_temp*/
