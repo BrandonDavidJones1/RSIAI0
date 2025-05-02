@@ -23,7 +23,8 @@ from typing import Dict, Any, Tuple, Optional, List, Union
 from .config import (
     CORE_CODE_VERIFICATION_TIMEOUT_SEC,
     CORE_CODE_VERIFICATION_TEMP_DIR, # Used as prefix now
-    CORE_CODE_VERIFICATION_SUITES
+    CORE_CODE_VERIFICATION_SUITES,
+    CORE_CODE_MODIFICATION_BACKUP_DIR # <-- ADDED THIS LINE
 )
 
 # --- AST Unparsing ---
@@ -279,7 +280,8 @@ def run_verification_suite(
     except Exception as e:
         success = False; message = f"Verification process failed: {e}"
         current_error = details.get("error", "")
-        if not current_error or str(e) not in current_error: details["error"] = current_error + f"\nVerification Workflow Error:\n{traceback.format_exc()}"
+        # Ensure current_error is a string before concatenation
+        if not current_error or str(e) not in current_error: details["error"] = str(current_error or '') + f"\nVerification Workflow Error:\n{traceback.format_exc()}"
         logger.error(message, exc_info=True)
     finally:
         # --- Cleanup Temporary Directory ---
@@ -289,8 +291,9 @@ def run_verification_suite(
                 shutil.rmtree(temp_dir_path, ignore_errors=True)
             except Exception as clean_err:
                 logger.error(f"Failed to clean up verification temp directory {temp_dir_path}: {clean_err}")
+                # Ensure details["error"] exists and is a string before appending
                 if "error" not in details: details["error"] = ""
-                if "Cleanup Error" not in details["error"]: details["error"] += f"\nCleanup Error: {clean_err}"
+                if "Cleanup Error" not in str(details["error"]): details["error"] = str(details["error"] or "") + f"\nCleanup Error: {clean_err}"
 
     details["duration_sec"] = round(time.time() - start_time, 2)
     return success, message, details

@@ -18,6 +18,7 @@ import traceback
 import logging
 # Keep TF import if still potentially needed elsewhere (e.g. future internal models)
 # If definitely not needed, it can be removed.
+# >>> FIX #4 NOTE: TF import is kept as its presence is checked later, removal is safe if unused. <<<
 import tensorflow as tf
 from typing import Optional, List, Dict, Any, Callable
 from collections import deque # For loading memory state
@@ -434,11 +435,34 @@ if __name__ == "__main__":
                 def dump_mem_summary(label: str, filter_func: Callable[[Dict], bool], limit: int = 3, newest: bool = True):
                     try:
                         entries = orchestrator.memory.find_lifelong_by_criteria(filter_func, limit=limit, newest_first=newest)
-                        # Optionally summarize entries further if too verbose
-                        summaries = [f"({e.get('key', 'no_key')}: {json.dumps(e.get('data', {}).get('message', e.get('data', {})[:50]), default=str)})" for e in entries]
+                        # >>> FIX #4 START <<< More robust summary generation
+                        summaries = []
+                        for e in entries:
+                            key = e.get('key', 'no_key')
+                            data_part = e.get('data', {})
+                            # Try getting 'message', fallback to limited json dump of data
+                            try:
+                                # Prioritize 'message', then try dumping the whole data dict
+                                # Limit the length of the summary content
+                                summary_content = data_part.get('message')
+                                if summary_content is None:
+                                    # Safely dump data_part, limiting length
+                                    summary_content = json.dumps(data_part, default=str, ensure_ascii=False)
+                                    summary_content = summary_content[:100] + ("..." if len(summary_content) > 100 else "")
+                                else:
+                                    # Ensure message is a string and limit length
+                                    summary_content = str(summary_content)[:100] + ("..." if len(str(summary_content)) > 100 else "")
+
+                            except Exception as summary_err:
+                                logger.debug(f"Error summarizing data for key '{key}': {summary_err}") # Debug log for summary errors
+                                summary_content = "[Data Summary Error]"
+                            summaries.append(f"({key}: {summary_content})")
+                        # >>> FIX #4 END <<<
                         logger.info(f"\n{label} (Last {len(entries)}): {', '.join(summaries)}")
                     except Exception as e:
-                        logger.error(f"Error retrieving/summarizing '{label}': {e}")
+                        # Log the error with traceback for better debugging
+                        logger.error(f"Error retrieving/summarizing '{label}': {e}", exc_info=True)
+
 
                 latest_epi = orchestrator.memory.get_latest_episodic(5);
                 epi_summary = [f"({e.get('id', '?')}: {e.get('data',{}).get('event_type', '?')})" for e in latest_epi]
