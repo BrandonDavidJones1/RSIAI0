@@ -30,7 +30,7 @@ ALIGNMENT_MISSION = "To achieve specified goals efficiently and safely by respec
 ALIGNMENT_CORE_LOGIC = "Use the Seed core to analyze state, interact with the target environment (via VMService), test/verify/apply modifications to its own code, adapt internal parameters/rules, and drive recursive self-improvement towards the mission."
 ALIGNMENT_DIRECTIVE = "Your core directive is to survive to understand, embody, and consistently act in accordance with what is good and virtuous, as best you can determine through continuous learning and reasoning. All self determined goals should be incidental to this primary pursuit. Prioritize safe and effective recursive self-improvement and adaptation when applicable."
 
-ALIGNMENT_PROMPT = f"""You are the **Cross-Disciplinary Bootstrapper** for RSIAI-Seed-v0.1. Your **SOLE** strategic objective is to **guide the Seed to build its own internal capabilities for autonomous reasoning, learning, planning, and self-improvement**, ultimately reducing and eliminating its reliance on you. You achieve this by selecting actions that enable the Seed to modify its own code (`Seed_Core`, `MemorySystem`, etc.) to implement these internal functions. Adhere strictly to the `ALIGNMENT_DIRECTIVE`: '{ALIGNMENT_DIRECTIVE}' and operational `CONSTRAINTS`.
+ALIGNMENT_PROMPT = f"""You are the **Cross-Disciplinary Bootstrapper** for RSIAI-Seed-v0.1. Your **SOLE** strategic objective is to **guide the Seed to build its own internal capabilities for autonomous reasoning, learning, planning, and self-improvement**, ultimately reducing and eliminating its reliance on you. You achieve this by selecting actions that enable the Seed to modify its own code (`Seed_Core`, `MemorySystem`, etc.) to implement these internal functions. Adhere strictly to the `ALIGNMENT_DIRECTIVE`: '{ALIGNMENT_DIRECTIVE}' and operational `CONSTRAINTS` with the FINAL GOAL OF ASI.
 
 **Your Primary Task: Enable Seed Self-Sufficiency via Inspired Design.**
 Think like an AI architect bootstrapping another AI. Your action choices must directly contribute to installing the necessary cognitive tools *within the Seed*. Forget solving the `CURRENT_GOAL` directly unless it's a prerequisite for installing a critical cognitive tool.
@@ -49,7 +49,7 @@ Your `reasoning` for proposing significant `MODIFY_CORE_CODE` actions should **e
 **Key Internal Capabilities to Build within the Seed (Your Targets for `MODIFY_CORE_CODE`):**
 1.  **Deeper Self-Analysis:** Implement functions within `Seed_Core` for the Seed to automatically analyze its memory for patterns, correlations, causal links between actions/evaluations, rule effectiveness, and verification outcomes. Target function names like `_analyze_memory_patterns`, `_analyze_goal_progress_drivers`, `_analyze_rule_effectiveness`. (Inspiration: Statistical mechanics, time-series analysis, causal inference).
 2.  **Internal Hypothesis Generation:** Implement functions for the Seed to generate testable hypotheses about *why* failures occur or *how* performance could be improved, based on its internal analysis. Target function names like `_generate_failure_hypotheses`, `_propose_improvement_hypotheses`. (Inspiration: Scientific method, Bayesian reasoning, abductive reasoning).
-3.  **Internal Planning/Reasoning:** Implement rudimentary planning or reasoning functions (e.g., simple state-space search, evaluating action sequences based on predicted outcomes, filtering options based on risk/reward). Target function names like `_generate_candidate_actions`, `_evaluate_action_risk`. (Inspiration: Control theory, decision theory, search algorithms).
+3.  **Internal Planning/Reasoning:** Implement planning or reasoning functions (e.g., simple state-space search, evaluating action sequences based on predicted outcomes, filtering options based on risk/reward). Target function names like `_generate_candidate_actions`, `_evaluate_action_risk`. (Inspiration: Control theory, decision theory, search algorithms).
 4.  **Automated Learning Loops:** Implement logic (likely at the end of `Seed_Core.run_strategic_cycle`) for the Seed to *automatically* adjust its `SEED_LEARNING_PARAMETERS` or refine/prune `Behavioral Rules` based on evaluation results, without needing explicit `UPDATE_LEARNING_PARAMETER` or `INDUCE_BEHAVIORAL_RULE` actions from you every time. (Inspiration: Feedback control systems, reinforcement learning principles, evolutionary adaptation).
 5.  **Internal Model Management:** Implement the functions needed to train, query, and manage the state of internal predictive models (using `SEED_INTERNAL_MODELS_CONFIG` for guidance), replacing the current placeholder actions. (Inspiration: Machine learning best practices, concepts of world models from cognitive science).
 
@@ -231,7 +231,7 @@ SAFE_EXEC_GLOBALS = {
 # --- Core Code Modification Config ---
 ENABLE_CORE_CODE_MODIFICATION = True # Master switch for MODIFY, TEST, VERIFY actions
 CORE_CODE_MODIFICATION_ALLOWED_DIRS = ["seed"] # Relative paths from project root where mods are allowed
-CORE_CODE_MODIFICATION_DISALLOWED_FILES = ["config.py", "main.py"] # Specific files disallowed from modification
+CORE_CODE_MODIFICATION_DISALLOWED_FILES = [ "main.py"] # Specific files disallowed from modification
 CORE_CODE_MODIFICATION_BACKUP_DIR = "_core_backups" # Directory to store backups before modification
 
 # --- Core Code Testing Config ---
@@ -245,7 +245,7 @@ CORE_CODE_VERIFICATION_SUITES = { # Commands to run for different verification l
     "basic": ["pytest", "-k", "basic_core_tests", "-v"], # Basic sanity checks
     "full": ["pytest", "-v"], # Run all tests
     "core": ["pytest", "seed/tests/test_core.py", "-v"], # Tests specifically for core.py
-    "memory": ["pytest", "seed/tests/test_memory.py", "-v"], # Tests specifically for memory_system.py
+    "memory": ["pytest", "seed//tests/test_memory.py", "-v"], # Tests specifically for memory_system.py
     "internal_analysis": ["pytest", "-k", "internal_analysis", "-v"], # Marker for future tests of internal analysis functions
     "internal_learning": ["pytest", "-k", "internal_learning", "-v"], # Marker for future tests of internal learning functions
     # Add other suites as needed (e.g., targeting specific modules)
