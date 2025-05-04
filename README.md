@@ -28,8 +28,8 @@ By cloning, running, or modifying this software, you acknowledge these risks and
 
 1.  Clone the repository:
     ```bash
-    git clone <repository_url>
-    cd rsiai-seed
+    git clone https://github.com/BrandonDavidJones1/RSIAI0
+    cd RSIAI0
     ```
 2.  Create and activate a virtual environment (Recommended):
     ```bash
@@ -75,7 +75,4 @@ By cloning, running, or modifying this software, you acknowledge these risks and
 
 ## Running the System
 
-WARNING: Always run this system in a properly isolated environment (e.g., a dedicated Docker container, a virtual machine) to contain potential risks associated with self-modification and code execution. Monitor resource usage closely.
-
-```bash
-python -m seed.main
+WARNING: Always run this system in a properly isolated environment (e.g., a dedicated Docker container, a virtual machine, or on an air-gapped dedicated machine) to contain potential risks associated with self-modification and code execution. Monitor resource usage closely.
