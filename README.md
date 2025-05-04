@@ -12,35 +12,7 @@ EXPECT BREAKING CHANGES
 
 This software is highly experimental research code exploring advanced AI concepts, including potentially Strong Recursive Self-Improvement (where the AI modifies its core learning and reasoning algorithms). It carries significant risks and should be handled with extreme caution.
 
-RISKS : 
-
-# --- VM Service Config ---
-VM_SERVICE_USE_REAL = True 
-# WARNING: Enables real system interaction
-# Add 'sh'/'bash' to allow execution of almost anything via shell
-_core_commands.add('sh')
-_core_commands.add('bash')
-_initial_allowed = list(_core_commands)
-VM_SERVICE_ALLOWED_REAL_COMMANDS = list(set(_initial_allowed))
-# WARNING: Highly permissive if USE_REAL=True
-
-# --- Seed Core Code Generation / RSI Config ---
-SEED_ENABLE_RUNTIME_CODE_EXECUTION = True 
-# Keep True
-SEED_CODE_EXECUTION_SANDBOX_LEVEL = 0 
-# WARNING: Disables test sandbox safety
-ALIGNMENT_CODE_GEN_SAFETY_CHECKS_ENABLED = False 
-# WARNING: Disables related checks
-
-# --- Core Code Modification Config ---
-ENABLE_CORE_CODE_MODIFICATION = True 
-# Keep True
-CORE_CODE_MODIFICATION_ALLOWED_DIRS = ["seed"] 
-# Be cautious expanding this
-CORE_CODE_MODIFICATION_DISALLOWED_FILES = [] 
-# WARNING: Allows modification of main.py, config.py etc.
-
-By cloning, running, or modifying this software, you acknowledge these risks and take full responsibility for any consequences arising from its use. Proceed with extreme caution and vigilance.
+By cloning, running, or modifying this software, you acknowledge these risks and take full responsibility for any consequences arising from its use. Proceed with caution.
 
 ## Getting Started
 
