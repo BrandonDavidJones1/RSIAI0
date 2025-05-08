@@ -4,11 +4,12 @@
 """
 Handles the execution of verification tests for proposed core code modifications.
 Applies modifications to temporary code copies, runs specified test suites,
-parses results, and performs cleanup.
+parses results, and performs cleanup. Includes debugging logs.
 """
 import time
 import logging # Import base logging module
 import os
+import sys # <<< Import sys for sys.executable
 import shutil
 import subprocess
 import pathlib
@@ -78,7 +79,8 @@ class ReplaceFunctionTransformer(ast.NodeTransformer):
         return self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> ast.AST:
-        return self.generic_visit(node)
+        # Traverse into classes to find methods
+        return self.generic_visit(node) # Corrected from pass
 
 
 # --- Helper Function to Apply Modification ---
@@ -103,6 +105,7 @@ def apply_modification_to_copy(
         Tuple[bool, str]: (success, message)
     """
     logger.debug(f"Applying modification '{mod_type}' to temp file '{temp_file_path}' (Target: '{target_id[:50]}...')")
+    modified_code_str: Optional[str] = None # Initialize
     try:
         if not temp_file_path.is_file():
              return False, f"Temporary file missing at {temp_file_path}"
@@ -140,7 +143,7 @@ def apply_modification_to_copy(
         elif mod_type in ["REPLACE_FUNCTION", "REPLACE_METHOD"]:
             # --- AST-based Modifications ---
             if new_code is None:
-                return False, f"Missing 'new_code' for {mod_type}"
+                return False, f"Missing 'new_code'/'new_logic' for {mod_type}" # Corrected message
             if ast_unparse is None:
                  return False, "AST unparsing library (ast.unparse or astor) not available. Cannot perform function/method replacement."
 
@@ -149,10 +152,11 @@ def apply_modification_to_copy(
                     original_code_str = f_read.read()
                 original_ast = ast.parse(original_code_str, filename=str(temp_file_path))
 
-                new_code_ast_module = ast.parse(new_code.strip(), filename="<new_code>")
-                if not new_code_ast_module.body or not isinstance(new_code_ast_module.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+                new_code_block = new_code.strip()
+                parsed_new_code_nodes = ast.parse(new_code_block, filename="<new_code>").body
+                if not parsed_new_code_nodes or not isinstance(parsed_new_code_nodes[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
                     return False, "Provided 'new_code' does not parse into a valid function/method definition."
-                new_func_node = new_code_ast_module.body[0]
+                new_func_node = parsed_new_code_nodes[0]
 
                 transformer = ReplaceFunctionTransformer(target_name=target_id, new_func_node=new_func_node)
                 modified_ast = transformer.visit(original_ast)
@@ -164,18 +168,28 @@ def apply_modification_to_copy(
                 logger.debug(f"AST modification successful for '{target_id}'.")
 
             except SyntaxError as syn_err:
-                 return False, f"Syntax error parsing original or new code: {syn_err}"
+                 return False, f"Syntax error parsing code for AST modification: {syn_err}"
             except Exception as ast_err:
                  return False, f"Error during AST manipulation for '{target_id}': {ast_err}"
         else:
             return False, f"Unknown modification_type: {mod_type}"
+
+        # --- DEBUG: Log the modified code before final validation/write ---
+        if modified_code_str is not None:
+            logger.debug(f"--- START: Modified Code String for {temp_file_path} ---\n{modified_code_str}\n--- END: Modified Code String ---")
+        else:
+            logger.warning("modified_code_str is None before final validation step.")
+            return False, "Internal error: Modified code string not generated."
 
         # --- Validate Syntax of the final modified code ---
         try:
             ast.parse(modified_code_str)
         except SyntaxError as final_syn_err:
             logger.error(f"Modified code resulted in Syntax Error: {final_syn_err}")
-            return False, f"Modification resulted in invalid Python syntax: {final_syn_err}"
+            line_no = getattr(final_syn_err, 'lineno', '?')
+            offset = getattr(final_syn_err, 'offset', '?')
+            error_line = modified_code_str.splitlines()[line_no-1] if line_no != '?' and line_no > 0 and line_no <= len(modified_code_str.splitlines()) else '[Line not found]'
+            return False, f"Modification resulted in invalid Python syntax: {final_syn_err} (Line {line_no}, Offset {offset}, near '{error_line.strip()}')"
 
         # --- Write the modified code back to the temporary file ---
         try:
@@ -224,14 +238,19 @@ def run_verification_suite(
         mod_type = modification_params.get("modification_type")
         if mod_type in ["REPLACE_FUNCTION", "REPLACE_METHOD"]:
              target_id = modification_params.get("target_name")
+             new_code = modification_params.get("new_logic")
         elif mod_type in ["REPLACE_LINE", "INSERT_AFTER_LINE", "DELETE_LINE"]:
              target_id = modification_params.get("target_line_content")
+             new_code = modification_params.get("new_content")
         else: raise ValueError(f"Unknown modification_type for verification: {mod_type}")
-        if mod_type in ["REPLACE_FUNCTION", "REPLACE_METHOD"]: new_code = modification_params.get("new_logic")
-        elif mod_type == "REPLACE_LINE" or mod_type == "INSERT_AFTER_LINE": new_code = modification_params.get("new_content")
-        else: new_code = None
-        if not file_rel_path_str or not target_id: raise ValueError("Missing required modification parameters (file_path, target_id/target_line_content).")
-        if new_code is None and mod_type != "DELETE_LINE": raise ValueError(f"Missing required 'new_code'/'new_content' for modification type '{mod_type}'.")
+
+        if not file_rel_path_str: raise ValueError("Missing required modification parameter 'file_path'.")
+        if not target_id:
+            target_key = "target_name" if mod_type in ["REPLACE_FUNCTION", "REPLACE_METHOD"] else "target_line_content"
+            raise ValueError(f"Missing required modification parameter '{target_key}'.")
+        if new_code is None and mod_type != "DELETE_LINE":
+            code_key = "new_logic" if mod_type in ["REPLACE_FUNCTION", "REPLACE_METHOD"] else "new_content"
+            raise ValueError(f"Missing required parameter '{code_key}' for modification type '{mod_type}'.")
 
         file_rel_path = pathlib.Path(file_rel_path_str)
         original_file_path = project_root.joinpath(file_rel_path).resolve()
@@ -242,7 +261,11 @@ def run_verification_suite(
         logger.info(f"Verification starting for {file_rel_path} (Level: {verification_level}) in temp dir: {temp_dir_path}")
 
         # --- Copy Project Structure ---
-        ignore_patterns = shutil.ignore_patterns( '.git*', '*__pycache__*', '*.pyc', '*.pyo', '.DS_Store', CORE_CODE_VERIFICATION_TEMP_DIR + "*", CORE_CODE_MODIFICATION_BACKUP_DIR, '*.log', '*.pkl', '*.bak', '.env', 'venv', '.venv' )
+        ignore_patterns = shutil.ignore_patterns(
+            '.git*', '*__pycache__*', '*.pyc', '*.pyo', '.DS_Store',
+            CORE_CODE_VERIFICATION_TEMP_DIR + "*", CORE_CODE_MODIFICATION_BACKUP_DIR,
+            '*.log', '*.pkl', '*.bak', '.env', 'venv', '.venv', 'docs', '_build', '*.egg-info'
+        )
         shutil.copytree(project_root, temp_dir_path, ignore=ignore_patterns, dirs_exist_ok=True)
         temp_file_path = temp_dir_path.joinpath(file_rel_path).resolve()
         logger.debug(f"Copied project structure to '{temp_dir_path}'. Target file temp path: '{temp_file_path}'")
@@ -253,18 +276,50 @@ def run_verification_suite(
         logger.info("Modification applied successfully to temporary code copy.")
 
         # --- Select and Run Test Suite ---
-        test_command_list = CORE_CODE_VERIFICATION_SUITES.get(verification_level)
-        if not test_command_list or not isinstance(test_command_list, list): raise ValueError(f"Verification level '{verification_level}' not found or invalid in config.")
+        test_command_template = CORE_CODE_VERIFICATION_SUITES.get(verification_level)
+        if not test_command_template or not isinstance(test_command_template, list): raise ValueError(f"Verification level '{verification_level}' not found or invalid in config.")
+
+        # --- Prepare Environment and Command for Subprocess ---
+        modified_env = os.environ.copy()
+        python_path = modified_env.get('PYTHONPATH', '')
+        temp_dir_str = str(temp_dir_path)
+        if python_path:
+            modified_env['PYTHONPATH'] = f"{temp_dir_str}{os.pathsep}{python_path}"
+        else:
+            modified_env['PYTHONPATH'] = temp_dir_str
+        # DEBUG: Log environment
+        logger.debug(f"Verification subprocess environment:\nPYTHONPATH={modified_env.get('PYTHONPATH')}\nOther env keys: {len(modified_env)}")
+
+        test_command_list = [sys.executable, "-m"] + test_command_template
+        # DEBUG: Log command
+        logger.debug(f"Verification subprocess command list: {test_command_list}")
         logger.info(f"Running verification command: {' '.join(test_command_list)} in temp dir '{temp_dir_path}'")
 
         # --- Execute Tests ---
+        stdout = ""; stderr = ""; exit_code = -99 # Initialize
         try:
-            proc = subprocess.run( test_command_list, cwd=temp_dir_path, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=CORE_CODE_VERIFICATION_TIMEOUT_SEC, check=False, shell=False )
+            proc = subprocess.run(
+                test_command_list,
+                cwd=temp_dir_path,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                errors='replace',
+                timeout=CORE_CODE_VERIFICATION_TIMEOUT_SEC,
+                check=False,
+                shell=False,
+                env=modified_env
+            )
             exit_code = proc.returncode; stdout = proc.stdout; stderr = proc.stderr
             logger.info(f"Verification command finished with exit code {exit_code}.")
-        except subprocess.TimeoutExpired: exit_code = -9; stdout = ""; stderr = f"Verification timed out after {CORE_CODE_VERIFICATION_TIMEOUT_SEC} seconds."; logger.error(stderr)
-        except FileNotFoundError: exit_code = 127; stdout = ""; stderr = f"Verification command not found: '{test_command_list[0]}'. Ensure test runner (e.g., pytest) is installed and in PATH."; logger.error(stderr)
-        except Exception as subp_err: exit_code = -1; stdout = ""; stderr = f"Error running verification command: {subp_err}\n{traceback.format_exc()}"; logger.error(f"Error running verification subprocess: {subp_err}")
+        except subprocess.TimeoutExpired: exit_code = -9; stderr = f"Verification timed out after {CORE_CODE_VERIFICATION_TIMEOUT_SEC} seconds."; logger.error(stderr)
+        except FileNotFoundError: exit_code = 127; stderr = f"Verification command not found: '{test_command_list[0]}'. Ensure Python interpreter and pytest are accessible."; logger.error(stderr)
+        except Exception as subp_err: exit_code = -1; stderr = f"Error running verification command: {subp_err}\n{traceback.format_exc()}"; logger.error(f"Error running verification subprocess: {subp_err}")
+
+        # DEBUG: Log full stdout and stderr
+        logger.debug(f"--- START: Verification Subprocess STDOUT (Exit Code: {exit_code}) ---\n{stdout}\n--- END: Verification Subprocess STDOUT ---")
+        if stderr:
+            logger.debug(f"--- START: Verification Subprocess STDERR ---\n{stderr}\n--- END: Verification Subprocess STDERR ---")
 
         details['exit_code'] = exit_code; details['output'] = stdout.strip(); details['error'] = stderr.strip()
 
@@ -274,26 +329,32 @@ def run_verification_suite(
             logger.info(message)
         else:
             success = False; stderr_snippet = f" Stderr: {stderr[:200].strip()}..." if stderr else ""
-            message = f"Verification FAILED (Level: {verification_level}). Exit Code: {exit_code}.{stderr_snippet}"; logger.warning(message)
-            if stderr: logger.debug(f"Full Verification Stderr:\n{stderr}")
+            stdout_snippet = f" Stdout: {stdout[:200].strip()}..." if stdout and exit_code != 0 else ""
+            message = f"Verification FAILED (Level: {verification_level}). Exit Code: {exit_code}.{stderr_snippet}{stdout_snippet}"; logger.warning(message)
+            # No longer need debug logs here as they are logged above unconditionally
+            # if stderr: logger.debug(f"Full Verification Stderr:\n{stderr}")
+            # if stdout and exit_code != 0: logger.debug(f"Full Verification Stdout (on failure):\n{stdout}")
 
     except Exception as e:
         success = False; message = f"Verification process failed: {e}"
         current_error = details.get("error", "")
-        # Ensure current_error is a string before concatenation
         if not current_error or str(e) not in current_error: details["error"] = str(current_error or '') + f"\nVerification Workflow Error:\n{traceback.format_exc()}"
         logger.error(message, exc_info=True)
     finally:
         # --- Cleanup Temporary Directory ---
         if temp_dir_path and temp_dir_path.exists():
+            # --- DEBUG OPTION: Uncomment below to PREVENT cleanup for manual inspection ---
+            # logger.warning(f"DEBUG: Preventing cleanup of temp verification dir: {temp_dir_path}")
+            # pass # Skip cleanup
+            # --- END DEBUG OPTION ---
+            # Default: Clean up
             try:
-                logger.debug(f"Cleaning up verification temp directory: {temp_dir_path}")
-                shutil.rmtree(temp_dir_path, ignore_errors=True)
+                 logger.debug(f"Cleaning up verification temp directory: {temp_dir_path}")
+                 shutil.rmtree(temp_dir_path, ignore_errors=True)
             except Exception as clean_err:
-                logger.error(f"Failed to clean up verification temp directory {temp_dir_path}: {clean_err}")
-                # Ensure details["error"] exists and is a string before appending
-                if "error" not in details: details["error"] = ""
-                if "Cleanup Error" not in str(details["error"]): details["error"] = str(details["error"] or "") + f"\nCleanup Error: {clean_err}"
+                 logger.error(f"Failed to clean up verification temp directory {temp_dir_path}: {clean_err}")
+                 if "error" not in details: details["error"] = ""
+                 if "Cleanup Error" not in str(details["error"]): details["error"] = str(details["error"] or "") + f"\nCleanup Error: {clean_err}"
 
     details["duration_sec"] = round(time.time() - start_time, 2)
     return success, message, details

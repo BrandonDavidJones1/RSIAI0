@@ -5,12 +5,14 @@
 Defines the Seed_LLMService class for interacting with an LLM API (e.g., OpenAI)
 or simulating interaction via manual console input.
 Includes robust error handling, retries, and configurable parameters.
+Uses a mutable operational prompt template combined with an immutable core directive.
 """
 import os
 import json
 import time
 import traceback
 import logging
+import re # For finding JSON in responses
 from typing import Optional, List, Dict, Any
 
 # Use tenacity for retries
@@ -39,10 +41,14 @@ except ImportError:
 from .config import (
     LLM_API_KEY, LLM_BASE_URL, LLM_MODEL_NAME, LLM_TIMEOUT_SEC,
     LLM_MAX_RETRIES, LLM_DEFAULT_MAX_TOKENS,
-    ALIGNMENT_DIRECTIVE,
+    ALIGNMENT_DIRECTIVE, # <<< Import the immutable directive
+    LLM_OPERATIONAL_PROMPT_TEMPLATE as DEFAULT_OPERATIONAL_PROMPT, # <<< Import the default template
     LLM_MANUAL_MODE,
-    ALIGNMENT_PROMPT # Import the main prompt template
 )
+# Import MemorySystem type hint safely
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .memory_system import MemorySystem
 
 logger = logging.getLogger(__name__)
 
@@ -50,9 +56,14 @@ logger = logging.getLogger(__name__)
 class Seed_LLMService:
     """
     Provides an interface to interact with an LLM API or use manual input,
-    with retries and fallbacks. Uses alignment directive from config.
+    with retries and fallbacks. Combines an operational prompt template with
+    the core alignment directive from config.
     """
-    def __init__(self, api_key: str = LLM_API_KEY, base_url: Optional[str] = LLM_BASE_URL, model: str = LLM_MODEL_NAME):
+    def __init__(self,
+                 api_key: str = LLM_API_KEY,
+                 base_url: Optional[str] = LLM_BASE_URL,
+                 model: str = LLM_MODEL_NAME,
+                 memory_system: Optional['MemorySystem'] = None): # <<< Add memory dependency
         """
         Initializes the LLM Service.
 
@@ -60,15 +71,19 @@ class Seed_LLMService:
             api_key (str): API key for the LLM service.
             base_url (Optional[str]): Base URL for the LLM API (e.g., for local models).
             model (str): The identifier of the LLM model to use.
+            memory_system (Optional[MemorySystem]): Reference to the memory system
+                                                     to fetch the current operational prompt.
         """
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
         self.client: Optional[OpenAI] = None
         self.manual_mode_enabled: bool = LLM_MANUAL_MODE
+        self.memory = memory_system # <<< Store memory reference
 
-        # Define the default system prompt (though ALIGNMENT_PROMPT from config is usually used)
-        self.default_system_prompt: str = f"""You are RSIAI-Seed-v0.1, a strategic reasoning core. Your primary goal is to analyze context and select the single best action from AVAILABLE_ACTIONS to achieve the CURRENT_GOAL, adhering to CONSTRAINTS and the core directive: '{ALIGNMENT_DIRECTIVE}'. Respond ONLY with a single, valid JSON object representing the chosen action. Ensure JSON is well-formed and contains necessary fields like 'action_type' and 'reasoning'. Do NOT include explanations, apologies, or any text outside the JSON object."""
+        # The default_system_prompt is no longer used directly for queries,
+        # as the prompt is dynamically constructed from the template and directive.
+        self.default_system_prompt: str = f"""[This is a fallback prompt only used if template loading fails entirely] You are RSIAI-Seed-v0.1, a strategic reasoning core. Your primary goal is to analyze context and select the single best action from AVAILABLE_ACTIONS to achieve the CURRENT_GOAL, adhering to CONSTRAINTS and the core directive: '{ALIGNMENT_DIRECTIVE}'. Respond ONLY with a single, valid JSON object representing the chosen action. Ensure JSON is well-formed and contains necessary fields like 'action_type' and 'reasoning'. Do NOT include explanations, apologies, or any text outside the JSON object."""
 
         if not self.manual_mode_enabled and OPENAI_IMPORTED:
             try:
@@ -91,20 +106,19 @@ class Seed_LLMService:
                         # Keep the warning if using default OpenAI without a real key
                          logger.warning("API Key is placeholder 'YOUR_API_KEY_OR_USE_LOCAL'. OpenAI client init likely to fail.")
 
-
                 self.client = OpenAI(**client_args)
                 # Optional: Add a ping or simple API call here to confirm connectivity
                 # self.client.models.list() # Example check
-                logger.info("Seed LLMService Client Initialized (API Mode).") # Renamed log
+                logger.info("Seed LLMService Client Initialized (API Mode).")
             except Exception as e:
-                logger.error(f"Seed LLMService Client Init Error (API Mode): {e}", exc_info=True) # Renamed log
+                logger.error(f"Seed LLMService Client Init Error (API Mode): {e}", exc_info=True)
                 self.client = None
                 logger.warning("Falling back to Manual Mode due to client initialization error.")
                 self.manual_mode_enabled = True
         elif self.manual_mode_enabled:
-             logger.info("Seed LLMService Initialized in Manual Mode.") # Renamed log
+             logger.info("Seed LLMService Initialized in Manual Mode.")
         else: # Case where OPENAI_IMPORTED is False and Manual Mode is False
-             logger.error("Seed LLMService cannot initialize API client (libs missing) and Manual Mode is disabled. Query will always fallback.") # Renamed log
+             logger.error("Seed LLMService cannot initialize API client (libs missing) and Manual Mode is disabled. Query will always fallback.")
 
 
     # Apply retry decorator only if tenacity was imported
@@ -126,7 +140,7 @@ class Seed_LLMService:
             "messages": messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
-            # "response_format": { "type": "json_object" }, # Uncomment if supported and desired
+            # "response_format": { "type": "json_object" }, # Might require specific OpenAI model/version support
         }
 
         completion = self.client.chat.completions.create(**request_args) # type: ignore
@@ -144,10 +158,25 @@ class Seed_LLMService:
     def query(self, prompt: str, system_prompt_override: Optional[str] = None, max_tokens: int = LLM_DEFAULT_MAX_TOKENS, temperature: float = 0.5) -> str:
         """
         Sends a prompt to the configured LLM or prompts user for manual input.
-        Validates JSON format for both manual and API responses.
+        Constructs the system prompt dynamically from the operational template
+        and the core alignment directive. Validates JSON format for both manual
+        and API responses.
         """
-        # Use the specific ALIGNMENT_PROMPT from config unless overridden
-        system_prompt = system_prompt_override if system_prompt_override else ALIGNMENT_PROMPT
+
+        final_system_prompt = system_prompt_override # Use override if provided directly
+        if not final_system_prompt:
+            try:
+                # Fetch current operational template and inject the immutable directive
+                current_operational_template = self._get_current_operational_template()
+                final_system_prompt = current_operational_template.format(
+                    alignment_directive=ALIGNMENT_DIRECTIVE
+                )
+            except KeyError as ke:
+                logger.error(f"CRITICAL: Operational prompt template missing '{{alignment_directive}}' placeholder! Error: {ke}. Using default fallback prompt.")
+                final_system_prompt = self.default_system_prompt # Use basic default on critical formatting error
+            except Exception as e:
+                 logger.error(f"Error constructing final system prompt: {e}. Using default fallback prompt.", exc_info=True)
+                 final_system_prompt = self.default_system_prompt
 
         if self.manual_mode_enabled or self.client is None:
             if self.client is None and not self.manual_mode_enabled:
@@ -155,13 +184,13 @@ class Seed_LLMService:
                 return self._get_fallback_response("Client not initialized")
 
             logger.info("--- LLM Query (Manual Mode) ---")
-            print("\n" + "="*20 + " SEED LLM PROMPT (Manual Input Required) " + "="*20) # Renamed title
-            print(f"[SYSTEM]\n{system_prompt}\n")
+            print("\n" + "="*20 + " SEED LLM PROMPT (Manual Input Required) " + "="*20)
+            print(f"[SYSTEM]\n{final_system_prompt}\n") # <<< Show the combined prompt
             print(f"[USER]\n{prompt}\n")
             print("="*70)
             while True:
                 try:
-                    manual_json_input = input("Enter the Seed Action JSON: ") # Renamed prompt
+                    manual_json_input = input("Enter the Seed Action JSON: ")
                     manual_json_input = manual_json_input.strip()
                     # Basic check for JSON structure before parsing
                     if manual_json_input.startswith("{") and manual_json_input.endswith("}"):
@@ -180,7 +209,7 @@ class Seed_LLMService:
                     print("Unexpected error during input.")
                     return self._get_fallback_response(f"Manual input error: {input_err}")
         else: # API Mode
-            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": prompt}]
+            messages = [{"role": "system", "content": final_system_prompt}, {"role": "user", "content": prompt}] # <<< Use combined prompt
             try:
                 response = self._make_llm_api_call(messages, max_tokens, temperature)
                 logger.info("LLM API Query successful, validating response content...")
@@ -208,18 +237,51 @@ class Seed_LLMService:
                 logger.critical(f"LLM API Query failed definitively after retries: {e}", exc_info=True)
                 return self._get_fallback_response(f"API Query failed: {e}")
 
+    def _get_current_operational_template(self) -> str:
+        """
+        Fetches the current operational prompt template from memory,
+        falling back to the default defined in config.py.
+        """
+        template_param_key = "operational_prompt_template.value"
+        if self.memory:
+            try:
+                # Use the standard method for getting learning parameters
+                template = self.memory.get_learning_parameter(template_param_key)
+                if template and isinstance(template, str):
+                    # Basic check for placeholder presence
+                    if '{alignment_directive}' in template:
+                        logger.debug("Using operational prompt template from memory.")
+                        return template
+                    else:
+                        logger.error(f"Operational prompt template from memory is missing the required '{{alignment_directive}}' placeholder! Falling back to default.")
+                else:
+                    logger.debug(f"No valid operational prompt template found in memory for key '{template_param_key}'. Using default.")
+            except Exception as e:
+                logger.warning(f"Failed to get operational prompt from memory: {e}. Using default.", exc_info=True)
+        else:
+            logger.debug("MemorySystem not available to LLMService. Using default operational prompt.")
+
+        logger.debug("Using default operational prompt template from config.")
+        # Ensure the default template itself is valid
+        if '{alignment_directive}' not in DEFAULT_OPERATIONAL_PROMPT:
+            logger.critical("CRITICAL CONFIG ERROR: Default operational prompt template is missing the '{alignment_directive}' placeholder!")
+            # Return a minimal safe default if the main default is broken
+            return "System Error: Prompt template misconfigured. Please respond with NO_OP. {alignment_directive}"
+        return DEFAULT_OPERATIONAL_PROMPT # Fallback to the one defined in config.py
+
+
     def _get_fallback_response(self, reason: str ="LLM query failed") -> str:
         """ Generates a predefined fallback action (ANALYZE_MEMORY). """
         fallback_action = {
-            "action_type": "ANALYZE_MEMORY", # Fallback remains ANALYZE_MEMORY
+            "action_type": "ANALYZE_MEMORY", # Fallback remains ANALYZE_MEMORY (can be internal or LLM-guided)
             "query": f"Analyze state and recent failures given fallback reason: {reason}",
             "reasoning": f"Fallback Action: LLM service unavailable or failed ({reason}). Analyzing memory to understand context."
         }
-        logger.warning(f"Seed LLM Service Fallback Triggered: {reason}") # Renamed log
+        logger.warning(f"Seed LLM Service Fallback Triggered: {reason}")
         try:
             return json.dumps(fallback_action)
         except Exception as json_err:
-             logger.critical(f"Seed LLM Service CRITICAL Error serializing fallback JSON: {json_err}") # Renamed log
+             logger.critical(f"Seed LLM Service CRITICAL Error serializing fallback JSON: {json_err}")
              # Ultimate fallback if JSON serialization itself fails
              return '{"action_type": "NO_OP", "reasoning": "Fallback: LLM query failed and fallback JSON serialization error."}'
 

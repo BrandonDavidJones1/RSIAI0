@@ -11,7 +11,7 @@ import pytest
 import time
 import copy
 import collections # For deque in Seed_Core internal state
-from unittest.mock import MagicMock, patch, call # Using standard unittest.mock
+from unittest.mock import MagicMock, patch, call, ANY
 
 # Import the class to be tested
 from seed.core import Seed_Core
@@ -33,23 +33,33 @@ def mock_dependencies():
         "sensory_refiner": MagicMock(name="MockSensoryRefiner"),
     }
     # Default configurations for mocked methods
-    mocks["memory_system"].get_learning_parameter.return_value = 0.6 # Default temp
-    # Make get_learning_parameter return specific values based on input string
+    # Ensure side_effect handles empty name for get_learning_parameter
     def get_param_side_effect(param_name):
+        if not param_name: # Handle request for all params
+             # Return a deep copy resembling the structure loaded/saved
+             return copy.deepcopy(SEED_LEARNING_PARAMETERS)
         if param_name == "llm_query_temperature.value":
-            # Allow tests to configure this via the mock if needed, else default
             if hasattr(mocks["memory_system"], '_mock_temp_return'):
                 return mocks["memory_system"]._mock_temp_return
-            return 0.6
+            # Fallback to default if not specifically mocked for a test
+            return SEED_LEARNING_PARAMETERS.get("llm_query_temperature", {}).get("value", 0.6)
         elif param_name == "evaluation_weights":
-             # Return a structure similar to the config for evaluation tests
-             return copy.deepcopy(SEED_LEARNING_PARAMETERS["evaluation_weights"])
-        # Add other specific param mocks if needed by future tests
+             return copy.deepcopy(SEED_LEARNING_PARAMETERS.get("evaluation_weights", {}))
+        elif param_name == "rule_application_mode.value":
+            return SEED_LEARNING_PARAMETERS.get("rule_application_mode", {}).get("value", "log_suggestion")
+        # Add other specific param mocks if needed
+        # Simulate nested access for evaluation weights if requested directly
+        elif param_name.startswith("evaluation_weights.") and param_name.endswith(".value"):
+             parts = param_name.split('.')
+             if len(parts) == 3:
+                 weight_name = parts[1]
+                 return SEED_LEARNING_PARAMETERS.get("evaluation_weights", {}).get(weight_name, {}).get("value", 0.0)
         return None # Default for unhandled params
     mocks["memory_system"].get_learning_parameter.side_effect = get_param_side_effect
     mocks["memory_system"].update_learning_parameter.return_value = True # Assume success
     mocks["memory_system"].get_behavioral_rules.return_value = {} # Default empty rules
-    mocks["memory_system"].find_lifelong_by_criteria.return_value = [] # Default empty memory search
+    # Default side effect for find_lifelong_by_criteria, might be overridden in specific tests
+    mocks["memory_system"].find_lifelong_by_criteria.return_value = []
 
     mocks["sensory_refiner"].refine.return_value = {"summary": {}, "cwd": "/app", "target_status": {}} # Basic refine result
     mocks["vm_service"].get_state.return_value = {"mode": "simulation", "cwd": "/app", "filesystem": {}, "resources": {}} # Basic vm state
@@ -112,9 +122,9 @@ def test_set_invalid_goal(seed_core_instance, mock_dependencies):
 # --- Tests for NEW Internal Methods ---
 
 # Test _analyze_memory_patterns
-# @pytest.mark.skip(reason="Analysis method _analyze_memory_patterns not yet implemented or tests not written")
+# >>> START OF MODIFIED TEST <<<
 def test_analyze_memory_patterns_basic(seed_core_instance, mock_dependencies):
-    """ Test basic functionality of _analyze_memory_patterns. """
+    """ Test basic functionality of _analyze_memory_patterns with robust mock. """
     mock_memory = mock_dependencies["memory_system"]
 
     # Setup mock memory entries
@@ -131,43 +141,62 @@ def test_analyze_memory_patterns_basic(seed_core_instance, mock_dependencies):
         {'key': 'SEED_Action_EXECUTE_VM_COMMAND_Error2', 'data': {'result_reason': 'permission_denied'}, 'tags': ['Error']}, # Repeated error
     ]
 
-    # Configure mock find_lifelong_by_criteria
-    def mock_find_side_effect(filter_func, limit=None, newest_first=False):
-        # Crude check based on string representation of lambda
-        if "SEED_Evaluation" in repr(filter_func):
-            return mock_evals
-        elif "Error" in repr(filter_func) or "Critical" in repr(filter_func):
-            return mock_errors
-        return []
-    mock_memory.find_lifelong_by_criteria.side_effect = mock_find_side_effect
+    # --- Robust Mock Side Effect ---
+    dummy_eval_entry = {'key': 'SEED_Evaluation_dummy', 'tags': []}
+    dummy_error_entry = {'key': 'SomeOtherKey', 'tags': ['Error']}
+
+    def robust_mock_find_side_effect(filter_func, limit=None, newest_first=False):
+        # Determine filter type by calling it on dummy entries
+        is_eval_filter = False
+        is_error_filter = False
+        try:
+            if filter_func(dummy_eval_entry):
+                is_eval_filter = True
+            elif filter_func(dummy_error_entry):
+                 is_error_filter = True
+        except Exception as e:
+             # Log potential errors during filter execution within the mock
+             print(f"ERROR in robust_mock_find_side_effect applying filter: {e}")
+             # pytest.fail(f"Filter function call failed within mock side effect: {e}") # Or fail test
+
+        # Return corresponding mock data based on filter type
+        if is_eval_filter:
+            return copy.deepcopy(mock_evals[:limit] if limit else mock_evals)
+        elif is_error_filter:
+            # The original function already filters errors correctly, reuse that logic
+            actual_errors = [copy.deepcopy(e) for e in mock_errors if filter_func(e)]
+            return actual_errors[:limit] if limit else actual_errors
+        else:
+            # Fallback if filter doesn't match known patterns
+            print(f"WARNING in robust_mock_find_side_effect: Unknown filter function type.")
+            return []
+
+    mock_memory.find_lifelong_by_criteria.side_effect = robust_mock_find_side_effect
+    # --- End Robust Mock ---
 
     # Call the method
     analysis_result = seed_core_instance._analyze_memory_patterns(history_limit=10) # Use limit
 
     # Assertions
     assert analysis_result is not None
-    assert analysis_result.get("error") is None
+    assert analysis_result.get("error") is None, f"Analysis resulted in error: {analysis_result.get('error')}"
 
     # Check success rates
     rates = analysis_result.get("action_success_rates", {})
-    assert "READ_FILE" in rates
-    assert rates["READ_FILE"]["count"] == 2
-    assert pytest.approx(rates["READ_FILE"]["avg_success"]) == 0.9 # (1.0 + 0.8) / 2
-    assert "WRITE_FILE" in rates
-    assert rates["WRITE_FILE"]["count"] == 1
-    assert pytest.approx(rates["WRITE_FILE"]["avg_success"]) == 0.2
-    assert "EXECUTE_VM_COMMAND" in rates
-    assert rates["EXECUTE_VM_COMMAND"]["count"] == 1
-    assert pytest.approx(rates["EXECUTE_VM_COMMAND"]["avg_success"]) == 0.0
+    expected_rates = {
+        "READ_FILE": {"avg_success": 0.9, "count": 2},
+        "WRITE_FILE": {"avg_success": 0.2, "count": 1},
+        "EXECUTE_VM_COMMAND": {"avg_success": 0.0, "count": 1}
+    }
+    assert rates == expected_rates
 
-    # Check common errors (should prioritize 'reason', then 'error', then 'msg')
+    # Check common errors
     errors = analysis_result.get("common_errors", [])
-    assert len(errors) > 0
-    # Check if 'permission_denied' is the top error (count 2)
+    assert len(errors) == 3 # Expecting top 3
     assert errors[0] == ('permission_denied', 2)
-    # Check presence of others (order might vary if counts are equal)
-    assert ('Msg: Disk full...' in [e[0] for e in errors]) or ('Msg: Disk full' in [e[0] for e in errors]) # Handle potential truncation
-    assert ('Error: API Timeout...' in [e[0] for e in errors]) or ('Error: API Timeout' in [e[0] for e in errors])
+    error_reasons_found = {e[0] for e in errors}
+    assert any(reason.startswith('Msg: Disk full') for reason in error_reasons_found)
+    assert any(reason.startswith('Error: API Timeout') for reason in error_reasons_found)
 
     # Check that memory.log was called to store the analysis
     mock_memory.log.assert_any_call(
@@ -175,11 +204,15 @@ def test_analyze_memory_patterns_basic(seed_core_instance, mock_dependencies):
         analysis_result, # Should log the result it calculated
         tags=["Seed", "Analysis", "InternalState"]
     )
+# >>> END OF MODIFIED TEST <<<
 
 def test_analyze_memory_patterns_no_data(seed_core_instance, mock_dependencies):
     """ Test _analyze_memory_patterns when memory returns no relevant entries. """
     mock_memory = mock_dependencies["memory_system"]
-    mock_memory.find_lifelong_by_criteria.return_value = [] # Simulate no history
+    # Use the robust mock, but ensure it returns empty lists when called
+    def empty_side_effect(filter_func, limit=None, newest_first=False):
+        return []
+    mock_memory.find_lifelong_by_criteria.side_effect = empty_side_effect
 
     analysis_result = seed_core_instance._analyze_memory_patterns()
 
@@ -197,7 +230,7 @@ def test_generate_failure_hypotheses_file_not_found(seed_core_instance, mock_dep
 
     hypotheses = seed_core_instance._generate_failure_hypotheses(last_action, last_eval)
 
-    assert len(hypotheses) >= 1 # Expect at least one hypothesis
+    assert len(hypotheses) >= 1
     assert any("path 'nonexistent/file.txt' might be incorrect" in h for h in hypotheses)
     mock_memory.log.assert_called_with(
         "SEED_FailureHypotheses",
@@ -216,12 +249,18 @@ def test_generate_failure_hypotheses_permission(seed_core_instance, mock_depende
 def test_generate_failure_hypotheses_no_failure(seed_core_instance, mock_dependencies):
     """ Test that no hypotheses are generated for successful actions. """
     mock_memory = mock_dependencies["memory_system"]
+    mock_memory.log.reset_mock()
     last_action = {"action_type": "NO_OP"}
     last_eval = {"overall_success": 1.0}
     hypotheses = seed_core_instance._generate_failure_hypotheses(last_action, last_eval)
     assert len(hypotheses) == 0
-    # Ensure log was NOT called
-    assert call("SEED_FailureHypotheses", unittest.mock.ANY, tags=unittest.mock.ANY) not in mock_memory.log.call_args_list
+    found_call = False
+    for actual_call in mock_memory.log.call_args_list:
+        args, kwargs = actual_call
+        if args and args[0] == "SEED_FailureHypotheses":
+            found_call = True
+            break
+    assert not found_call
 
 
 # Test _propose_improvement_hypotheses
@@ -231,8 +270,8 @@ def test_propose_improvement_hypotheses_low_success(seed_core_instance, mock_dep
     analysis = {
         "action_success_rates": {
             "READ_FILE": {"avg_success": 0.9, "count": 10},
-            "MODIFY_CORE_CODE": {"avg_success": 0.1, "count": 5}, # Low success
-            "TEST_CORE_CODE": {"avg_success": 0.4, "count": 2} # Low count
+            "MODIFY_CORE_CODE": {"avg_success": 0.1, "count": 5},
+            "TEST_CORE_CODE": {"avg_success": 0.4, "count": 2}
         },
         "common_errors": []
     }
@@ -267,72 +306,66 @@ def test_propose_improvement_hypotheses_analysis_error(seed_core_instance, mock_
 def test_perform_automated_learning_increase_temp(seed_core_instance, mock_dependencies):
     """ Test that LLM temperature increases with low average success. """
     mock_memory = mock_dependencies["memory_system"]
-    # Set initial temp low
     mock_memory._mock_temp_return = 0.3
-    seed_core_instance._recent_eval_scores = collections.deque([0.1, 0.2, 0.1, 0.0, 0.2], maxlen=5) # Avg < 0.3
+    seed_core_instance._recent_eval_scores = collections.deque([0.1, 0.2, 0.1, 0.0, 0.2], maxlen=5)
 
-    last_eval = {"overall_success": 0.25} # Current eval doesn't matter as much as avg
+    last_eval = {"overall_success": 0.25}
     seed_core_instance._perform_automated_learning(last_eval)
 
-    # Check update_learning_parameter was called correctly
-    expected_temp = 0.3 + 0.05 # Initial temp + step
+    expected_temp = 0.3 + 0.05
     mock_memory.update_learning_parameter.assert_called_once_with(
         "llm_query_temperature.value",
         pytest.approx(expected_temp)
     )
+    if hasattr(mock_memory, '_mock_temp_return'):
+        delattr(mock_memory, '_mock_temp_return')
+
 
 def test_perform_automated_learning_decrease_temp(seed_core_instance, mock_dependencies):
     """ Test that LLM temperature decreases with high average success. """
     mock_memory = mock_dependencies["memory_system"]
-    # Set initial temp high
     mock_memory._mock_temp_return = 0.9
-    seed_core_instance._recent_eval_scores = collections.deque([0.9, 0.85, 0.95, 1.0, 0.8], maxlen=5) # Avg > 0.8
+    seed_core_instance._recent_eval_scores = collections.deque([0.9, 0.85, 0.95, 1.0, 0.8], maxlen=5)
 
     last_eval = {"overall_success": 0.88}
     seed_core_instance._perform_automated_learning(last_eval)
 
-    # Check update_learning_parameter was called correctly
-    expected_temp = 0.9 - 0.05 # Initial temp - step
+    expected_temp = 0.9 - 0.05
     mock_memory.update_learning_parameter.assert_called_once_with(
         "llm_query_temperature.value",
         pytest.approx(expected_temp)
     )
+    if hasattr(mock_memory, '_mock_temp_return'):
+        delattr(mock_memory, '_mock_temp_return')
 
 def test_perform_automated_learning_no_change(seed_core_instance, mock_dependencies):
     """ Test that LLM temperature doesn't change with moderate average success. """
     mock_memory = mock_dependencies["memory_system"]
     mock_memory._mock_temp_return = 0.6
-    seed_core_instance._recent_eval_scores = collections.deque([0.5, 0.6, 0.7, 0.5, 0.4], maxlen=5) # Avg between 0.3 and 0.8
+    seed_core_instance._recent_eval_scores = collections.deque([0.5, 0.6, 0.7, 0.5, 0.4], maxlen=5)
 
     last_eval = {"overall_success": 0.55}
     seed_core_instance._perform_automated_learning(last_eval)
 
-    # Check update_learning_parameter was NOT called
     mock_memory.update_learning_parameter.assert_not_called()
+    if hasattr(mock_memory, '_mock_temp_return'):
+        delattr(mock_memory, '_mock_temp_return')
 
 def test_perform_automated_learning_buffer_not_full(seed_core_instance, mock_dependencies):
     """ Test that no learning happens until the score buffer is full. """
     mock_memory = mock_dependencies["memory_system"]
-    seed_core_instance._recent_eval_scores = collections.deque([0.1, 0.9], maxlen=5) # Only 2 scores
+    seed_core_instance._recent_eval_scores = collections.deque([0.1, 0.9], maxlen=5)
 
     last_eval = {"overall_success": 0.5}
     seed_core_instance._perform_automated_learning(last_eval)
 
     mock_memory.update_learning_parameter.assert_not_called()
 
-# --- run_strategic_cycle Test Placeholder (Keep Skipped) ---
+# --- run_strategic_cycle Test Placeholder ---
 
 @pytest.mark.skip(reason="run_strategic_cycle tests require complex integration setup.")
 def test_run_strategic_cycle_basic(seed_core_instance, mock_dependencies):
     """ TODO: Implement integration tests for run_strategic_cycle. """
     pass
-
-
-# TODO: Add tests for remaining methods if logic becomes complex:
-# - _build_llm_prompt (verify context inclusion)
-# - _validate_direct_action_llm_response (more edge cases)
-# - _execute_seed_action (more action types, error conditions)
-# - _check_behavioral_rules (more complex patterns)
-# - Core code modification helpers (if modified from original)
 
 # --- END OF FILE RSIAI0/seed/tests/test_core.py ---

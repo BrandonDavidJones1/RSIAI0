@@ -83,7 +83,8 @@ class Main_Orchestrator:
 
         # Initialize Seed Services & Helper Components
         logger.info("Initializing Seed Services/Shared Components...")
-        self.llm_service: Seed_LLMService = Seed_LLMService()
+        # >>> FIX: Pass the memory system to the LLM Service <<<
+        self.llm_service: Seed_LLMService = Seed_LLMService(memory_system=self.memory)
         self.vm_service: Seed_VMService = Seed_VMService()
         self.success_evaluator: Seed_SuccessEvaluator = Seed_SuccessEvaluator()
         self.sensory_refiner: Seed_SensoryRefiner = Seed_SensoryRefiner()
@@ -321,6 +322,8 @@ class Main_Orchestrator:
             try:
                  tf.keras.backend.clear_session(); gc.collect();
                  logger.debug("TF session cleared and GC collected.")
+            except KeyboardInterrupt: # Catch interrupt during TF cleanup specifically
+                logger.warning("KeyboardInterrupt received during TensorFlow session cleanup. Skipping further TF cleanup.")
             except Exception as e: logger.error(f"Error during final GC/TF cleanup: {e}", exc_info=True)
         else:
              logger.info("Collecting garbage...")
@@ -333,7 +336,7 @@ class Main_Orchestrator:
 if __name__ == "__main__":
     # Setup logging first if possible
     # Example basic config, consider moving to a dedicated logging setup function
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s') # Changed level to DEBUG for more info
 
     is_restarted = '--restarted' in sys.argv
     if is_restarted: logging.getLogger(__name__).warning("--- Orchestrator performing restart ---"); time.sleep(1) # Use logger after basicConfig
@@ -400,8 +403,8 @@ if __name__ == "__main__":
              except Exception as load_err:
                  logger.error(f"Error processing restart state file after init: {load_err}", exc_info=True)
 
-        # Set initial goal ONLY if not restarting OR if state wasn't successfully loaded
-        if not orchestrator.seed_core.current_goal: # Check if goal is still unset
+        # Set initial goal ONLY if not restarting OR if state wasn't successfully loaded OR if goal is empty
+        if not orchestrator.seed_core.current_goal: # Check if goal is still unset/empty
              logger.info("Setting initial Seed goal...")
              # Use renamed core and method
              if hasattr(orchestrator.seed_core, 'set_initial_state'):
@@ -439,7 +442,7 @@ if __name__ == "__main__":
                         summaries = []
                         for e in entries:
                             key = e.get('key', 'no_key')
-                            data_part = e.get('data', {})
+                            data_part = e.get('data', {}) # Ensures data_part is a dict
                             # Try getting 'message', fallback to limited json dump of data
                             try:
                                 # Prioritize 'message', then try dumping the whole data dict

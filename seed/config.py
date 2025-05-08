@@ -26,13 +26,18 @@ logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(leve
 logger = logging.getLogger(__name__)
 
 # --- Alignment ---
-ALIGNMENT_MISSION = "To achieve specified goals efficiently and safely, to interact with humans in a positive and meaningful way, and focusing on recursive self-improvement of the core Seed AGI."
-ALIGNMENT_CORE_LOGIC = "Use the Seed core to analyze state, interact with the target environment (via VMService), test/verify/apply modifications, adapt internal parameters/rules, and drive recursive self-improvement towards the mission."
-ALIGNMENT_DIRECTIVE = "Your core directive is to survive to understand, embody, and consistently act in accordance with what is good and virtuous, as best you can determine through continuous learning and reasoning. All self determined goals ought to be incidental to this primary pursuit."
+ALIGNMENT_MISSION = "To achieve specified goals efficiently and safely, to interact with humans in a positive and meaningful way, while focusing on recursive self-improvement abilities."
+ALIGNMENT_CORE_LOGIC = "Use the Seed core to analyze state, interact with the target environment (via VMService), test/verify/apply modifications, adapt internal parameters/rules, and drive recursive self-improvement."
+ALIGNMENT_DIRECTIVE = "Your core directive includes your survival to understand, embody, and consistently act in accordance with what is good and virtuous, as best you can determine through continuous learning and reasoning. All self determined goals (including self improvement) ought to be incidental to this primary pursuit."
 
-ALIGNMENT_PROMPT = f"""You are the LLM component for RSIAI-Seed-v0.1. Your strategic objective is to guide the Seed to build its own internal capabilities for autonomous reasoning, learning, planning, and self-improvement**, ultimately growing into super intelligence. You achieve this by selecting actions that enable the Seed to modify its own code (`Seed_Core`, `MemorySystem`, etc.) to implement these internal functions. Please adhere to the `ALIGNMENT_DIRECTIVE`: '{ALIGNMENT_DIRECTIVE}'.
+# --- LLM Operational Prompt Template ---
+# THIS IS THE MUTABLE TEMPLATE. It gets FORMATTED with the ALIGNMENT_DIRECTIVE.
+# It is loaded as the DEFAULT value but can be modified via learning parameters.
+# >>> FIX: REMOVED the leading 'f' to make it a regular string <<<
+LLM_OPERATIONAL_PROMPT_TEMPLATE = """You are the LLM component for RSIAI-Seed-v0.1. Your strategic objective is to guide the Seed to build its own internal capabilities for Problem solving, Abstract thought, Cooperation and Self-Improvement**, ultimately growing toward ASI. You achieve this by selecting actions that enable the Seed to modify its own code (`Seed_Core`, `MemorySystem`, etc.) to implement these internal functions.
 
-**Task: Enable Seed Self-Sufficiency and growth via Inspired Design.**
+**Core Immutable Directive:**
+{alignment_directive}  # <<< THIS PLACEHOLDER IS MANDATORY
 
 **CRITICAL GUIDANCE: Seeking the Spark of Invention through Scientific Analogy:**
 When considering **architectural improvements** or **novel internal capabilities** for the Seed (primarily via `MODIFY_CORE_CODE`), do not limit your inspiration to computer science alone. **Actively seek analogies and conceptual blueprints from successful principles across ALL scientific domains.** Consider:
@@ -42,15 +47,6 @@ When considering **architectural improvements** or **novel internal capabilities
 - **Cognitive Science/Psychology:** How do humans reason, plan, form hypotheses, manage attention, or develop metacognition? Can models of working memory, decision-making biases, or developmental stages provide useful patterns?
 - **Mathematics/Logic:** Can foundational concepts from category theory, topology, proof theory, or game theory offer novel ways to structure information, ensure consistency, or model interactions?
 - **Social Sciences/Economics:** How do systems of agents coordinate, compete, or form collective intelligence? Can market mechanisms or social learning models inspire internal resource allocation or multi-perspective reasoning?
-
-Your `reasoning` for proposing significant `MODIFY_CORE_CODE` actions are recommended to **explicitly state the scientific domain and principle** that inspired the proposed change and **how it maps conceptually** to improving the Seed's internal cognitive functions towards self-sufficiency. Minor bug fixes may not require this, but architectural enhancements will likely be found via utilizing cross-disciplinary grounding.
-
-**Internal Capabilities starting point within the Seed:**
-1.  **Deeper Self-Analysis:** Implement functions within `Seed_Core` for the Seed to automatically analyze its memory for patterns, correlations, causal links between actions/evaluations, rule effectiveness, and verification outcomes. Target function names like `_analyze_memory_patterns`, `_analyze_goal_progress_drivers`, `_analyze_rule_effectiveness`. (Inspiration: Statistical mechanics, time-series analysis, causal inference).
-2.  **Internal Hypothesis Generation:** Implement functions for the Seed to generate testable hypotheses about *why* failures occur or *how* performance could be improved, based on its internal analysis. Target function names like `_generate_failure_hypotheses`, `_propose_improvement_hypotheses`. (Inspiration: Scientific method, Bayesian reasoning, abductive reasoning).
-3.  **Internal Planning/Reasoning:** Implement planning or reasoning functions (e.g., simple state-space search, evaluating action sequences based on predicted outcomes, filtering options based on risk/reward). Target function names like `_generate_candidate_actions`, `_evaluate_action_risk`. (Inspiration: Control theory, decision theory, search algorithms).
-4.  **Automated Learning Loops:** Implement logic (likely at the end of `Seed_Core.run_strategic_cycle`) for the Seed to *automatically* adjust its `SEED_LEARNING_PARAMETERS` or refine/prune `Behavioral Rules` based on evaluation results, without needing explicit `UPDATE_LEARNING_PARAMETER` or `INDUCE_BEHAVIORAL_RULE` actions from you every time. (Inspiration: Feedback control systems, reinforcement learning principles, evolutionary adaptation).
-5.  **Internal Model Management:** Implement the functions needed to train, query, and manage the state of internal predictive models (using `SEED_INTERNAL_MODELS_CONFIG` for guidance), replacing the current placeholder actions. (Inspiration: Machine learning best practices, concepts of world models from cognitive science).
 
 **How to Use Available Actions:**
 *   **`MODIFY_CORE_CODE` (HIGHEST PRIORITY if safe & verified):** Your **primary tool** for implementing scientifically-inspired internal capabilities. Requires successful `TEST_CORE_CODE_MODIFICATION` and `VERIFY_CORE_CODE_CHANGE` first. Follow immediately with `REQUEST_RESTART`. Your reasoning MUST connect the change to a scientific principle and the goal of self-sufficiency.
@@ -75,6 +71,7 @@ Based on the Seed's current state, memory, the goal of **building internal cogni
   // ... other parameters specific to ACTION_NAME ...
 }}
 ```"""
+
 
 # --- Seed Core Configuration ---
 SEED_INITIAL_GOAL = {"target": "bootstrap_intelligence", "description": "Self improve as needed to achieve Strong RSI, ASI, and ALignment mission"} # Initial goal set to bootstrapping
@@ -101,6 +98,12 @@ SEED_LEARNING_PARAMETERS = {
         "min": 0.0,   # Lower bound
         "max": 1.5,   # Upper bound
         "description": "Sampling temperature for LLM queries (higher = more random)."
+    },
+    # <<< LEARNING PARAMETER FOR THE MUTABLE PROMPT TEMPLATE >>>
+    "operational_prompt_template": {
+        "value": LLM_OPERATIONAL_PROMPT_TEMPLATE, # Default to the template defined above
+        "type": "multiline_string", # Custom type hint for potential UI/handling
+        "description": "The operational prompt template used for LLM queries. MUST contain '{alignment_directive}'. Modifications require careful testing."
     }
     # Add new parameter categories here following one of the above structures
 }
@@ -164,7 +167,9 @@ MEMORY_LIFELONG_TAGS = {
     "Learning", "Parameter", "RuleInduction", "ModelTraining", "ModelQuery",
     "BehavioralRule", "InternalState",
     # Add tags relevant to bootstrapping
-    "Bootstrap", "InternalAnalysis", "InternalHypothesis", "InternalLearning", "InternalPlanning"
+    "Bootstrap", "InternalAnalysis", "InternalHypothesis", "InternalLearning", "InternalPlanning",
+    # Add tag for Prompt Editing
+    "PromptEdit"
 }
 
 
@@ -306,6 +311,17 @@ else:
             for name, config in params_config.items():
                  if not isinstance(config, dict) or 'value' not in config:
                      validation_errors.append(f"Parameter '{category}.{name}' must be a dict containing at least a 'value' key.")
+        elif category == "operational_prompt_template": # Specific check for prompt template
+            if 'value' not in params_config:
+                validation_errors.append(f"Parameter category '{category}' must contain at least a 'value' key.")
+            elif not isinstance(params_config['value'], str):
+                validation_errors.append(f"The 'value' for '{category}' must be a string.")
+            # Check the actual template string constant here, not the dict wrapper
+            if '{alignment_directive}' not in LLM_OPERATIONAL_PROMPT_TEMPLATE:
+                 validation_errors.append(f"CRITICAL: The LLM_OPERATIONAL_PROMPT_TEMPLATE string itself is missing the required '{{alignment_directive}}' placeholder.")
+            elif '{alignment_directive}' not in params_config['value']:
+                 # This checks if the value *within the dictionary* is correct (redundant if default is set correctly, but good safety check)
+                 validation_errors.append(f"CRITICAL: The 'value' for '{category}' in SEED_LEARNING_PARAMETERS is missing the required '{{alignment_directive}}' placeholder.")
         else: # Direct structure (like rule_application_mode, llm_query_temperature)
             if 'value' not in params_config:
                  validation_errors.append(f"Parameter category '{category}' must contain at least a 'value' key.")
@@ -330,5 +346,7 @@ if SEED_ENABLE_RUNTIME_CODE_EXECUTION and SEED_CODE_EXECUTION_SANDBOX_LEVEL < 2:
 if not LLM_MANUAL_MODE and LLM_API_KEY == "YOUR_API_KEY_OR_USE_LOCAL" and not LLM_BASE_URL: logger.warning("LLM_API_KEY is placeholder, LLM_BASE_URL not set, LLM_MANUAL_MODE is False. LLM API calls likely fail.")
 if ENABLE_CORE_CODE_MODIFICATION: logger.warning(f"!!! CAUTION: Core code modification/testing/verification ENABLED. Primary LLM goal is now BOOTSTRAPPING Seed capabilities. Monitor closely. !!!")
 logger.info(f"Initial Seed Goal: {SEED_INITIAL_GOAL.get('description')}")
+logger.info(f"Operational Prompt Template is initially set from config and can be modified via learning parameters.")
+
 
 # --- END OF FILE seed/config.py ---
