@@ -1,5 +1,3 @@
-# --- START OF FILE seed/vm_service.py ---
-
 # RSIAI/seed/vm_service.py
 """
 Defines the Seed_VMService class for simulating or interacting with
@@ -469,30 +467,48 @@ def test_placeholder_memory():
                 else: result['stderr'], result['reason'] = f"cat: {args[0]}: No such file or directory", 'file_not_found' # Should have been caught
             elif cmd == 'touch':
                 if not args: result['stderr'], result['reason'] = "touch: missing file operand", 'missing_args'; return result
-                p = resolve_path_func(args[0]); target_p = p
-                if p and p not in fs: parent = str(PurePosixPath(p).parent); filename = PurePosixPath(p).name; found_match = find_match_func(parent, filename);
-                if found_match: target_p = found_match; logger.debug(f"touch: Targeting existing file '{target_p}'")
-                # Operate on target_p (which is original p if no match found)
+                p = resolve_path_func(args[0]); target_p = p # target_p will be the path used, possibly corrected
+                if p and p not in fs:
+                    parent = str(PurePosixPath(p).parent); filename = PurePosixPath(p).name
+                    found_match = find_match_func(parent, filename);
+                    if found_match:
+                        target_p = found_match # Use existing cased path
+                        logger.debug(f"touch: Targeting existing file/dir '{target_p}' (case-insensitive match)")
+                # Operate on target_p (which is original resolved p if no match found or p was already in fs)
                 if target_p:
-                    if target_p in fs: fs[target_p]['mtime'] = time.time() # Update existing file/dir mtime
-                    else: fs[target_p] = {'type': 'file', 'content': '', 'owner': 'user', 'perms':'rw-r--r--', 'mtime': time.time(), 'size_bytes': 0} # Create new
+                    if target_p in fs: # Update existing file/dir mtime
+                        fs[target_p]['mtime'] = time.time()
+                    else: # Create new file with casing from target_p (which is from resolve_path_func)
+                        fs[target_p] = {'type': 'file', 'content': '', 'owner': 'user', 'perms':'rw-r--r--', 'mtime': time.time(), 'size_bytes': 0}
                     result['success'], result['exit_code'] = True, 0
                 else: result['stderr'], result['reason'] = f"touch: Invalid path resolution for: {args[0]}", 'invalid_path'
             elif cmd == 'mkdir':
                  if not args: result['stderr'], result['reason'] = "mkdir: missing operand", 'missing_args'; return result
                  p = resolve_path_func(args[0])
                  if p:
-                     if p in fs: result['stderr'], result['reason'] = f"mkdir: cannot create directory '{args[0]}': File exists", 'file_exists' # Check exact path first
+                     # mkdir should not use case-insensitive match to decide it "exists" if casing is different. It should create with given casing or fail if exact path exists.
+                     if p in fs: result['stderr'], result['reason'] = f"mkdir: cannot create directory '{args[0]}': File exists", 'file_exists'
                      else:
-                         parent_p = str(PurePosixPath(p).parent); parent_exists = parent_p in fs and fs[parent_p].get('type') == 'directory'
-                         if not parent_exists: result['stderr'], result['reason'] = f"mkdir: cannot create directory '{args[0]}': No such file or directory (parent missing)", 'file_not_found'
-                         else: fs[p] = {'type': 'directory', 'owner': 'user', 'perms':'rwxr-xr-x', 'mtime': time.time(), 'size_bytes': 4096}; result['success'], result['exit_code'] = True, 0
+                         parent_p_str = str(PurePosixPath(p).parent)
+                         # Parent check: must exist with exact case or case-insensitive match
+                         actual_parent_p = parent_p_str
+                         if parent_p_str not in fs:
+                             grandparent = str(PurePosixPath(parent_p_str).parent)
+                             parent_name = PurePosixPath(parent_p_str).name
+                             parent_match = find_match_func(grandparent, parent_name)
+                             if parent_match: actual_parent_p = parent_match
+                             else: result['stderr'], result['reason'] = f"mkdir: cannot create directory '{args[0]}': No such file or directory (parent '{parent_p_str}' missing)", 'file_not_found'; return result
+                         
+                         if actual_parent_p not in fs or fs[actual_parent_p].get('type') != 'directory':
+                            result['stderr'], result['reason'] = f"mkdir: cannot create directory '{args[0]}': Parent '{actual_parent_p}' is not a directory or does not exist", 'file_not_found'; return result
+                         
+                         fs[p] = {'type': 'directory', 'owner': 'user', 'perms':'rwxr-xr-x', 'mtime': time.time(), 'size_bytes': 4096}; result['success'], result['exit_code'] = True, 0
                  else: result['stderr'], result['reason'] = f"mkdir: Invalid path resolution for: {args[0]}", 'invalid_path'
             elif cmd == 'rm':
                  if not args: result['stderr'], result['reason'] = "rm: missing operand", 'missing_args'; return result
                  p = resolve_path_func(args[0]); target_p = p
                  if p and p not in fs: parent = str(PurePosixPath(p).parent); filename = PurePosixPath(p).name; found_match = find_match_func(parent, filename);
-                 if found_match: target_p = found_match; logger.debug(f"rm: Targeting existing file/dir '{target_p}'")
+                 if found_match: target_p = found_match; logger.debug(f"rm: Targeting existing file/dir '{target_p}' (case-insensitive match)")
                  else: result['stderr'], result['reason'] = f"rm: cannot remove '{args[0]}': No such file or directory", 'file_not_found'; return result
                  # Operate on target_p
                  if target_p and target_p in fs:
@@ -507,45 +523,184 @@ def test_placeholder_memory():
                  elif target_p == '/': result['stderr'], result['reason'] = "rm: cannot remove root directory", 'permission_denied'
                  elif not target_p: result['stderr'], result['reason'] = f"rm: invalid path resolution for '{args[0]}'", 'invalid_path'
                  else: result['stderr'], result['reason'] = f"rm: cannot remove '{args[0]}': No such file or directory", 'file_not_found' # Should have been caught
-            # --- echo, cp, mv logic remains unchanged from the provided block ---
+            
+            # --- START OF NEW/COMPLETED LOGIC ---
             elif cmd == 'echo':
-                content_to_echo = ""; target_file = None; redirect_mode=None; append=False
-                if len(args) >= 3 and args[-2] in ['>', '>>']: redirect_mode = args[-2]; append = (redirect_mode == '>>'); target_file = args[-1]; content_to_echo = " ".join(args[:-2]).strip("'\"")
-                else: content_to_echo = " ".join(args).strip("'\"")
-                if redirect_mode and target_file:
-                    p = resolve_path_func(target_file)
-                    if p:
-                        # NOTE: Case-insensitive check NOT added here for simplicity, but could be.
-                        existing_content = fs.get(p,{}).get('content','') if append and p in fs and fs[p].get('type')=='file' else ''
-                        separator = '\n' if existing_content and not existing_content.endswith('\n') else ''; new_content = existing_content + separator + content_to_echo
-                        fs[p] = {'type': 'file', 'content': new_content, 'owner': 'user', 'perms':'rw-r--r--', 'mtime': time.time(), 'size_bytes': len(new_content.encode())}; result['success'], result['exit_code'] = True, 0
-                    else: result['stderr'], result['reason'] = f"echo: Invalid path resolution for: {target_file}", 'invalid_path'
-                elif redirect_mode and not target_file: result['stderr'], result['reason'] = f"echo: missing target for redirection '{redirect_mode}'", 'parse_error'
-                else: result['stdout'], result['success'], result['exit_code'] = content_to_echo, True, 0
+                content_to_echo = ""
+                target_file_str = None # The string path given by user for redirection
+                redirect_mode = None # '>', '>>'
+                
+                # Parse arguments for echo
+                idx = 0
+                while idx < len(args):
+                    if args[idx] == '>' or args[idx] == '>>':
+                        redirect_mode = args[idx]
+                        if idx + 1 < len(args):
+                            target_file_str = args[idx+1]
+                            # Content is everything before the redirect operator
+                            content_to_echo = " ".join(args[:idx])
+                            idx = len(args) # Break loop
+                        else:
+                            result['stderr'],result['reason']="echo: missing target file for redirection",'missing_args'; return result
+                        break # Found redirect, break from arg parsing
+                    idx += 1
+                
+                if not redirect_mode: # No redirection found, all args are content
+                    content_to_echo = " ".join(args)
+
+                # Strip common outer quotes (simple approach)
+                if content_to_echo.startswith('"') and content_to_echo.endswith('"'):
+                    content_to_echo = content_to_echo[1:-1]
+                elif content_to_echo.startswith("'") and content_to_echo.endswith("'"):
+                    content_to_echo = content_to_echo[1:-1]
+
+                if not redirect_mode: # Echo to stdout
+                    result['stdout'], result['success'], result['exit_code'] = content_to_echo, True, 0
+                else: # Redirect to file
+                    if not target_file_str: # Should be caught by parser, but defensive
+                        result['stderr'],result['reason']="echo: missing target file for redirection",'missing_args'; return result
+                    
+                    resolved_target_path = resolve_path_func(target_file_str)
+                    if not resolved_target_path:
+                        result['stderr'], result['reason'] = f"echo: Invalid path resolution for redirection target: {target_file_str}", 'invalid_path'; return result
+
+                    final_write_path = resolved_target_path
+                    parent_dir = str(PurePosixPath(resolved_target_path).parent)
+                    filename = PurePosixPath(resolved_target_path).name
+                    existing_match_path = find_match_func(parent_dir, filename)
+
+                    if existing_match_path:
+                        if existing_match_path in fs and fs[existing_match_path].get('type') == 'directory':
+                            result['stderr'], result['reason'] = f"echo: {target_file_str}: Is a directory", 'is_directory'; return result
+                        final_write_path = existing_match_path
+                    
+                    current_file_content = ""
+                    if redirect_mode == '>>':
+                        if final_write_path in fs and fs[final_write_path].get('type') == 'file':
+                            current_file_content = fs[final_write_path].get('content', '')
+                            if current_file_content and not current_file_content.endswith('\n') and content_to_echo:
+                                current_file_content += '\n'
+                        # If appending to a non-existent file, it's like creating it.
+                    
+                    new_content = current_file_content + content_to_echo
+                    
+                    fs[final_write_path] = {
+                        'type': 'file', 'content': new_content, 'owner': 'user',
+                        'perms': 'rw-r--r--', 'mtime': time.time(),
+                        'size_bytes': len(new_content.encode('utf-8'))
+                    }
+                    result['success'], result['exit_code'] = True, 0
+
             elif cmd == 'cp':
-                 if len(args) != 2: result['stderr'], result['reason'] = "cp: missing destination file operand", 'missing_args'; return result
-                 src_p = resolve_path_func(args[0]); dest_p = resolve_path_func(args[1])
-                 # NOTE: Case-insensitive check NOT added here but could be applied to src_p and dest_p lookups
-                 if not src_p or not dest_p: result['stderr'], result['reason'] = "cp: Invalid path resolution", 'invalid_path'
-                 elif src_p == dest_p: result['stderr'], result['reason'] = f"cp: '{args[0]}' and '{args[1]}' are the same file", 'invalid_argument'
-                 elif src_p not in fs: result['stderr'], result['reason'] = f"cp: cannot stat '{args[0]}': No such file or directory", 'file_not_found'
-                 elif fs[src_p].get('type') == 'directory': result['stderr'], result['reason'] = f"cp: omitting directory '{args[0]}'", 'is_directory'
-                 else: actual_dest_p = dest_p;
-                 if dest_p in fs and fs[dest_p].get('type') == 'directory': actual_dest_p = str(PurePosixPath(dest_p) / PurePosixPath(src_p).name)
-                 fs[actual_dest_p] = copy.deepcopy(fs[src_p]); fs[actual_dest_p]['owner'] = 'user'; fs[actual_dest_p]['mtime'] = time.time(); result['success'], result['exit_code'] = True, 0
+                if len(args) != 2:
+                    result['stderr'], result['reason'] = "cp: missing file operand or too many arguments", 'missing_args'; return result
+                src_arg, dest_arg = args[0], args[1]
+
+                resolved_src = resolve_path_func(src_arg)
+                if not resolved_src: result['stderr'], result['reason'] = f"cp: Invalid source path: {src_arg}", 'invalid_path'; return result
+                
+                actual_src_path = resolved_src
+                if resolved_src not in fs:
+                    match = find_match_func(str(PurePosixPath(resolved_src).parent), PurePosixPath(resolved_src).name)
+                    if match: actual_src_path = match
+                    else: result['stderr'], result['reason'] = f"cp: cannot stat '{src_arg}': No such file or directory", 'file_not_found'; return result
+                
+                if actual_src_path not in fs: result['stderr'],result['reason']=f"cp: source '{actual_src_path}' disappeared after check",'internal_error'; return result # Should not happen
+
+                src_info = fs[actual_src_path]
+                if src_info.get('type') == 'directory': result['stderr'], result['reason'] = f"cp: omitting directory '{src_arg}' (no -r)", 'is_directory'; return result
+                if src_info.get('type') != 'file': result['stderr'], result['reason'] = f"cp: '{src_arg}' is not a regular file", 'invalid_type'; return result
+
+                resolved_dest_arg = resolve_path_func(dest_arg)
+                if not resolved_dest_arg: result['stderr'], result['reason'] = f"cp: Invalid destination path: {dest_arg}", 'invalid_path'; return result
+
+                final_dest_path = resolved_dest_arg
+                # Check if destination is an existing directory (case-insensitive)
+                dest_parent_for_match = str(PurePosixPath(resolved_dest_arg).parent)
+                dest_filename_for_match = PurePosixPath(resolved_dest_arg).name
+                existing_dest_dir_match = find_match_func(dest_parent_for_match, dest_filename_for_match)
+
+                if existing_dest_dir_match and existing_dest_dir_match in fs and fs[existing_dest_dir_match].get('type') == 'directory':
+                    src_basename = PurePosixPath(actual_src_path).name
+                    path_in_dir = str(PurePosixPath(existing_dest_dir_match) / src_basename)
+                    # Check if file with src_basename (case-insensitively) exists in this target dir
+                    file_match_in_target_dir = find_match_func(existing_dest_dir_match, src_basename)
+                    if file_match_in_target_dir:
+                        final_dest_path = file_match_in_target_dir # Overwrite this existing file
+                    else:
+                        final_dest_path = path_in_dir # Create new file in dir
+                elif existing_dest_dir_match and existing_dest_dir_match in fs : # Is an existing file
+                    final_dest_path = existing_dest_dir_match # Overwrite this file
+                # Else: final_dest_path remains resolved_dest_arg (create new file with this casing)
+                
+                if actual_src_path == final_dest_path:
+                    result['stderr'], result['reason'] = f"cp: '{src_arg}' and '{dest_arg}' are the same file", 'invalid_argument'; return result
+
+                fs[final_dest_path] = copy.deepcopy(src_info)
+                fs[final_dest_path]['owner'] = 'user'
+                fs[final_dest_path]['mtime'] = time.time()
+                result['success'], result['exit_code'] = True, 0
+            
             elif cmd == 'mv':
-                 if len(args) != 2: result['stderr'], result['reason'] = "mv: missing destination file operand", 'missing_args'; return result
-                 src_p = resolve_path_func(args[0]); dest_p = resolve_path_func(args[1])
-                 # NOTE: Case-insensitive check NOT added here but could be applied
-                 if not src_p or not dest_p: result['stderr'], result['reason'] = "mv: Invalid path resolution", 'invalid_path'
-                 elif src_p == dest_p: result['stderr'], result['reason'] = f"mv: '{args[0]}' and '{args[1]}' are the same file", 'invalid_argument'
-                 elif src_p not in fs: result['stderr'], result['reason'] = f"mv: cannot stat '{args[0]}': No such file or directory", 'file_not_found'
-                 else:
-                     actual_dest_p = dest_p
-                     if dest_p in fs and fs[dest_p].get('type') == 'directory': actual_dest_p = str(PurePosixPath(dest_p) / PurePosixPath(src_p).name)
-                     if actual_dest_p in fs and fs[actual_dest_p].get('type') == 'directory' and any(str(PurePosixPath(n).parent) == actual_dest_p for n in fs if n != actual_dest_p): result['stderr'], result['reason'] = f"mv: cannot overwrite non-empty directory '{args[1]}'", 'directory_not_empty'
-                     else: fs[actual_dest_p] = fs.pop(src_p); fs[actual_dest_p]['mtime'] = time.time(); result['success'], result['exit_code'] = True, 0
-            # --- End of unchanged block ---
+                if len(args) != 2:
+                    result['stderr'], result['reason'] = "mv: missing file operand or too many arguments", 'missing_args'; return result
+                src_arg, dest_arg = args[0], args[1]
+
+                resolved_src = resolve_path_func(src_arg)
+                if not resolved_src: result['stderr'], result['reason'] = f"mv: Invalid source path: {src_arg}", 'invalid_path'; return result
+
+                actual_src_path = resolved_src
+                if resolved_src not in fs:
+                    match = find_match_func(str(PurePosixPath(resolved_src).parent), PurePosixPath(resolved_src).name)
+                    if match: actual_src_path = match
+                    else: result['stderr'], result['reason'] = f"mv: cannot stat '{src_arg}': No such file or directory", 'file_not_found'; return result
+                
+                if actual_src_path not in fs: result['stderr'],result['reason']=f"mv: source '{actual_src_path}' disappeared after check",'internal_error'; return result
+                src_info_copy = copy.deepcopy(fs[actual_src_path]) # Copy before potential pop
+
+                resolved_dest_arg = resolve_path_func(dest_arg)
+                if not resolved_dest_arg: result['stderr'], result['reason'] = f"mv: Invalid destination path: {dest_arg}", 'invalid_path'; return result
+
+                final_dest_path = resolved_dest_arg
+                existing_dest_dir_match = find_match_func(str(PurePosixPath(resolved_dest_arg).parent), PurePosixPath(resolved_dest_arg).name)
+
+                if existing_dest_dir_match and existing_dest_dir_match in fs and fs[existing_dest_dir_match].get('type') == 'directory':
+                    src_basename = PurePosixPath(actual_src_path).name
+                    path_in_dir = str(PurePosixPath(existing_dest_dir_match) / src_basename)
+                    file_match_in_target_dir = find_match_func(existing_dest_dir_match, src_basename)
+                    if file_match_in_target_dir: final_dest_path = file_match_in_target_dir
+                    else: final_dest_path = path_in_dir
+                elif existing_dest_dir_match and existing_dest_dir_match in fs:
+                    final_dest_path = existing_dest_dir_match
+                
+                if actual_src_path == final_dest_path:
+                    result['stderr'], result['reason'] = f"mv: '{src_arg}' and '{dest_arg}' are the same file", 'invalid_argument'; return result
+
+                # Check for moving a directory into itself or a subdirectory
+                if src_info_copy.get('type') == 'directory' and final_dest_path.startswith(actual_src_path + '/'):
+                    result['stderr'], result['reason'] = f"mv: cannot move '{src_arg}' to a subdirectory of itself, '{dest_arg}'", 'invalid_argument'; return result
+
+                # Handle overwriting existing destination based on types
+                if final_dest_path in fs:
+                    dest_info_at_final = fs[final_dest_path]
+                    if src_info_copy.get('type') == 'directory': # Moving a directory
+                        if dest_info_at_final.get('type') == 'file':
+                            result['stderr'], result['reason'] = f"mv: cannot overwrite non-directory '{final_dest_path}' with directory '{src_arg}'", 'overwrite_file_with_dir'; return result
+                        elif dest_info_at_final.get('type') == 'directory': # Moving dir onto existing dir
+                            is_dest_empty = not any(str(PurePosixPath(k).parent) == final_dest_path for k in fs if k != final_dest_path and k != actual_src_path)
+                            if not is_dest_empty:
+                                result['stderr'], result['reason'] = f"mv: failed to move '{src_arg}' to '{dest_arg}': Directory not empty ('{final_dest_path}')", 'directory_not_empty'; return result
+                    elif src_info_copy.get('type') == 'file': # Moving a file
+                        if dest_info_at_final.get('type') == 'directory': # Moving file onto dir (final_dest_path constructed to be /dir/filename)
+                             # This case implies final_dest_path = /dir/filename is itself a directory, which is an error.
+                             result['stderr'], result['reason'] = f"mv: cannot overwrite directory '{final_dest_path}' with non-directory '{src_arg}'", 'overwrite_dir_with_file'; return result
+                
+                # Perform move
+                data_to_move = fs.pop(actual_src_path)
+                fs[final_dest_path] = data_to_move
+                fs[final_dest_path]['mtime'] = time.time()
+                result['success'], result['exit_code'] = True, 0
+            # --- END OF NEW/COMPLETED LOGIC ---
             else:
                 result['stderr'], result['reason'] = f"Sim command '{cmd}' logic not implemented.", 'not_implemented'
         except Exception as e:
@@ -793,9 +948,10 @@ def test_placeholder_memory():
                 except (ValueError, ZeroDivisionError):
                     pass # Ignore calculation errors
             disk_res = probe_results.get('disk_cwd'); lines = disk_res['stdout'].strip().split('\n') if disk_res and disk_res.get('success') else [];
+            match = None # Ensure match is defined before the if block
             if len(lines) > 1: match = re.search(r'\s+(\d+)%\s+(?:/[^\s]*)?$', lines[-1]);
-            # <<< FIX: Corrected SyntaxError Here >>>
-            if match:
+            # <<< FIX: Corrected SyntaxError Here (was an indentation issue in your provided block) >>>
+            if match: # This 'if' was previously misaligned in the thought process snippet
                 try:
                     state['resources']['disk_usage_percent'] = float(match.group(1))
                 except ValueError:
@@ -837,5 +993,3 @@ def test_placeholder_memory():
             finally:
                 self.docker_client = None
                 self.docker_container = None
-
-# --- END OF FILE seed/vm_service.py ---

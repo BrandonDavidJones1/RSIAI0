@@ -11,6 +11,7 @@ import pytest
 import time
 import copy
 import collections # For deque in Seed_Core internal state
+# >>> FIX: Import 'call' and 'ANY' from unittest.mock <<< # Already imported via pytest fixtures? Keep for clarity.
 from unittest.mock import MagicMock, patch, call, ANY
 
 # Import the class to be tested
@@ -122,9 +123,9 @@ def test_set_invalid_goal(seed_core_instance, mock_dependencies):
 # --- Tests for NEW Internal Methods ---
 
 # Test _analyze_memory_patterns
-# >>> START OF MODIFIED TEST <<<
+# >>> START OF MODIFIED TEST (simplified robust mock side_effect) <<<
 def test_analyze_memory_patterns_basic(seed_core_instance, mock_dependencies):
-    """ Test basic functionality of _analyze_memory_patterns with robust mock. """
+    """ Test basic functionality of _analyze_memory_patterns with simplified robust mock. """
     mock_memory = mock_dependencies["memory_system"]
 
     # Setup mock memory entries
@@ -132,50 +133,40 @@ def test_analyze_memory_patterns_basic(seed_core_instance, mock_dependencies):
         {'key': 'SEED_Evaluation_1', 'data': {'action_summary': 'READ_FILE: x', 'overall_success': 1.0}},
         {'key': 'SEED_Evaluation_2', 'data': {'action_summary': 'WRITE_FILE: y', 'overall_success': 0.2}},
         {'key': 'SEED_Evaluation_3', 'data': {'action_summary': 'READ_FILE: z', 'overall_success': 0.8}},
-        {'key': 'SEED_Evaluation_4', 'data': {'action_summary': 'EXECUTE_VM_COMMAND: ls', 'overall_success': 0.0}}, # Failed command
+        {'key': 'SEED_Evaluation_4', 'data': {'action_summary': 'EXECUTE_VM_COMMAND: ls', 'overall_success': 0.0}},
     ]
     mock_errors = [
         {'key': 'SEED_Action_EXECUTE_VM_COMMAND_Error', 'data': {'result_reason': 'permission_denied'}, 'tags': ['Error']},
         {'key': 'SEED_Action_WRITE_FILE_Error', 'data': {'result_msg': 'Disk full'}, 'tags': ['Error']},
         {'key': 'SEED_LLMError_1', 'data': {'error': 'API Timeout'}, 'tags': ['Error', 'LLM']},
-        {'key': 'SEED_Action_EXECUTE_VM_COMMAND_Error2', 'data': {'result_reason': 'permission_denied'}, 'tags': ['Error']}, # Repeated error
+        {'key': 'SEED_Action_EXECUTE_VM_COMMAND_Error2', 'data': {'result_reason': 'permission_denied'}, 'tags': ['Error']},
     ]
 
-    # --- Robust Mock Side Effect ---
+    # --- Simplified Robust Mock Side Effect ---
     dummy_eval_entry = {'key': 'SEED_Evaluation_dummy', 'tags': []}
-    dummy_error_entry = {'key': 'SomeOtherKey', 'tags': ['Error']}
+    # No need for dummy_error_entry with simplified logic
 
-    def robust_mock_find_side_effect(filter_func, limit=None, newest_first=False):
-        # Determine filter type by calling it on dummy entries
-        is_eval_filter = False
-        is_error_filter = False
+    def simplified_robust_mock_find(filter_func, limit=None, newest_first=False):
         try:
+            # Check if the filter matches an evaluation entry
             if filter_func(dummy_eval_entry):
-                is_eval_filter = True
-            elif filter_func(dummy_error_entry):
-                 is_error_filter = True
+                # print("DEBUG: Mock returning mock_evals") # Optional
+                return copy.deepcopy(mock_evals[:limit] if limit else mock_evals)
+            else:
+                # Assume it's the error filter for this specific test context
+                # print("DEBUG: Mock assuming error filter, returning mock_errors") # Optional
+                actual_errors = [copy.deepcopy(e) for e in mock_errors if filter_func(e)]
+                return actual_errors[:limit] if limit else actual_errors
         except Exception as e:
-             # Log potential errors during filter execution within the mock
-             print(f"ERROR in robust_mock_find_side_effect applying filter: {e}")
-             # pytest.fail(f"Filter function call failed within mock side effect: {e}") # Or fail test
+            print(f"ERROR in simplified_robust_mock_find applying filter: {e}")
+            pytest.fail(f"Filter function call failed within mock side effect: {e}")
+        return [] # Should not be reached if filter logic is sound
 
-        # Return corresponding mock data based on filter type
-        if is_eval_filter:
-            return copy.deepcopy(mock_evals[:limit] if limit else mock_evals)
-        elif is_error_filter:
-            # The original function already filters errors correctly, reuse that logic
-            actual_errors = [copy.deepcopy(e) for e in mock_errors if filter_func(e)]
-            return actual_errors[:limit] if limit else actual_errors
-        else:
-            # Fallback if filter doesn't match known patterns
-            print(f"WARNING in robust_mock_find_side_effect: Unknown filter function type.")
-            return []
-
-    mock_memory.find_lifelong_by_criteria.side_effect = robust_mock_find_side_effect
-    # --- End Robust Mock ---
+    mock_memory.find_lifelong_by_criteria.side_effect = simplified_robust_mock_find
+    # --- End Simplified Robust Mock ---
 
     # Call the method
-    analysis_result = seed_core_instance._analyze_memory_patterns(history_limit=10) # Use limit
+    analysis_result = seed_core_instance._analyze_memory_patterns(history_limit=10)
 
     # Assertions
     assert analysis_result is not None
@@ -192,19 +183,23 @@ def test_analyze_memory_patterns_basic(seed_core_instance, mock_dependencies):
 
     # Check common errors
     errors = analysis_result.get("common_errors", [])
-    assert len(errors) == 3 # Expecting top 3
-    assert errors[0] == ('permission_denied', 2)
-    error_reasons_found = {e[0] for e in errors}
-    assert any(reason.startswith('Msg: Disk full') for reason in error_reasons_found)
-    assert any(reason.startswith('Error: API Timeout') for reason in error_reasons_found)
+    assert len(errors) == 3 # Expecting top 3, error filter should now work
+    # Convert list of tuples to set of tuples for easier comparison if order isn't guaranteed
+    errors_set = set(errors)
+    # Check counts and presence (order might vary based on Counter implementation details)
+    assert errors[0] == ('permission_denied', 2) # Top error should have count 2
+    assert len(errors_set) == 3 # Ensure 3 unique errors were found
+    assert any(e[0].startswith('Msg: Disk full') for e in errors_set)
+    assert any(e[0].startswith('Error: API Timeout') for e in errors_set)
 
-    # Check that memory.log was called to store the analysis
+    # Check memory log call
     mock_memory.log.assert_any_call(
         "SEED_InternalAnalysis",
-        analysis_result, # Should log the result it calculated
+        analysis_result,
         tags=["Seed", "Analysis", "InternalState"]
     )
 # >>> END OF MODIFIED TEST <<<
+
 
 def test_analyze_memory_patterns_no_data(seed_core_instance, mock_dependencies):
     """ Test _analyze_memory_patterns when memory returns no relevant entries. """
