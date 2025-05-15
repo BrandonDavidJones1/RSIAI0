@@ -1,4 +1,3 @@
-# --- START OF FILE RSIAI0/seed/core.py ---
 # RSIAI/seed/core.py
 """
 Core strategic component for the RSIAI Seed AGI.
@@ -133,8 +132,10 @@ class MockVMService(MockCoreService):
 class MockSelf:
     def __init__(self, mock_services=None, **kwargs):
         self._mock_attrs = kwargs
-        self.logger = logging.getLogger("CoreCodeTestMockSelf")
-        self._mock_attrs['logger'] = self.logger
+        # MODIFIED LINE: Use MockCoreService for self.logger
+        self.logger = MockCoreService(service_name="self_logger") # MODIFIED: Use MockCoreService for self.logger
+        # Ensure _mock_attrs['logger'] also points to this new mock logger
+        self._mock_attrs['logger'] = self.logger 
         self._mock_services = mock_services if isinstance(mock_services, dict) else {}
         for name, service in self._mock_services.items():
             setattr(self, name, service)
@@ -333,7 +334,7 @@ class Seed_Core:
                 actions_summary[action_type]['count'] += 1
                 actions_summary[action_type]['success_sum'] += success_score
             
-            logger.debug(f"Intermediate actions_summary for rates: {dict(actions_summary)}") # DEBUG LINE
+            logger.debug(f"Intermediate actions_summary for rates: {dict(actions_summary)}") 
 
             for act_type, summary in actions_summary.items():
                 if summary['count'] > 0:
@@ -366,7 +367,7 @@ class Seed_Core:
             analysis_results['error'] = f"Unexpected error during memory analysis: {e}"
             logger.error(analysis_results['error'], exc_info=True)
 
-        logger.debug(f"Internal memory pattern analysis completed. Rates: {analysis_results.get('action_success_rates')}") # DEBUG LINE
+        logger.debug(f"Internal memory pattern analysis completed. Rates: {analysis_results.get('action_success_rates')}") 
         self.memory.log("SEED_InternalAnalysis", analysis_results, tags=["Seed", "Analysis", "InternalState"])
         return analysis_results
 
@@ -760,7 +761,7 @@ class Seed_Core:
                     exec_res={"success":True,"message":"LLM-guided memory analysis complete.", "details":{"query":query, "analysis_result": analysis}}
                     self.memory.log(f"SEED_MemAnalysis_{cycle_id}", {"query": query, "analysis": analysis, "guided_by": "LLM"}, tags=['Seed','Memory', 'LLM'])
                  else:
-                    exec_res={"success":False,"message":"Requires valid 'query' string."}; log_tags.append('Error')
+                    exec_res={"success":False,"message":"Requires valid 'query' string."}; log_tags.append('Error'); exec_res['reason'] = 'invalid_argument'
             elif action_type == "TEST_CORE_CODE_MODIFICATION":
                 if not SEED_ENABLE_RUNTIME_CODE_EXECUTION: exec_res = {"success": False, "message": "Runtime code execution (needed for testing) is disabled."}; log_tags.append('Safety')
                 elif not ENABLE_CORE_CODE_MODIFICATION: exec_res = {"success": False, "message": "Core code modification/testing is disabled in config."}; log_tags.append('Safety')
@@ -939,6 +940,13 @@ class Seed_Core:
         if not new_logic or not isinstance(new_logic, str): result['message'] = "Missing or invalid 'new_logic'"; result['reason'] = 'invalid_argument'; return result
         if not target_name or not isinstance(target_name, str): result['message'] = "Missing or invalid 'target_name'"; result['reason'] = 'invalid_argument'; return result
         if not test_scenario or not isinstance(test_scenario, dict): result['message'] = "Missing or invalid 'test_scenario'"; result['reason'] = 'invalid_argument'; return result
+        
+        # Determine if the modification target is a method
+        # This is a heuristic; a more robust way might involve AST parsing of the original file
+        # to check if target_name is within a class, or rely on a "class_name" param if provided.
+        # For now, we assume REPLACE_METHOD implies it's a method.
+        is_method = (mod_type == "REPLACE_METHOD")
+
         def _run_test_in_sandbox(result_queue: queue.Queue):
             sandbox_result = {"output": None, "error": None, "success": False, "message": "", "raw_output": None, "mock_calls": {}, "evaluation_details": {}}
             func_handle = None; mock_self_instance = None; mock_services_dict = {};
@@ -949,33 +957,48 @@ class Seed_Core:
                 parsed_ast = ast.parse(new_logic, filename="<new_logic>"); defined_name = None
                 if parsed_ast.body and isinstance(parsed_ast.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)): defined_name = parsed_ast.body[0].name
                 if not defined_name: raise SyntaxError("Provided new_logic does not define a top-level function/method.")
-                expected_func_name = target_name; is_method = (mod_type == "REPLACE_METHOD")
+                expected_func_name = target_name
                 if defined_name != expected_func_name: raise SyntaxError(f"Logic defines '{defined_name}' but target was '{expected_func_name}'.")
                 logger.debug("Sandbox: Setting up scope and mocks...");
                 isolated_globals = SAFE_EXEC_GLOBALS.copy(); isolated_locals = {};
+                
+                # Make MockCoreService available in the sandbox if MockSelf needs it
+                if 'MockCoreService' not in isolated_globals:
+                    isolated_globals['MockCoreService'] = MockCoreService
+
                 test_logger = logging.getLogger(f"CoreCodeTestSandbox.{target_name}");
-                isolated_globals['logger'] = test_logger; isolated_globals['MockSelf'] = MockSelf
+                isolated_globals['logger'] = test_logger; # Global logger
+                isolated_globals['MockSelf'] = MockSelf # Make MockSelf class available
+
                 mock_services_config = expected_outcome.get('mock_services', {})
                 mock_services_dict['memory'] = MockMemorySystem(return_values=mock_services_config.get('memory'))
                 mock_services_dict['llm_service'] = MockLLMService(return_values=mock_services_config.get('llm_service'))
                 mock_services_dict['vm_service'] = MockVMService(return_values=mock_services_config.get('vm_service'))
+                
                 if is_method:
-                    logger.debug("Sandbox: Creating MockSelf instance with mocks...");
-                    mock_self_instance = MockSelf(mock_services=mock_services_dict)
+                    logger.debug("Sandbox: Creating MockSelf instance with mocks for method test...");
+                    # Pass the global test_logger to MockSelf if needed, or let MockSelf create its own.
+                    # If MockSelf's __init__ expects a logger kwarg:
+                    # mock_self_instance = MockSelf(mock_services=mock_services_dict, logger=test_logger)
+                    mock_self_instance = MockSelf(mock_services=mock_services_dict) # Current MockSelf makes its own MockCoreService logger
                     prepared_args.insert(0, mock_self_instance)
                     logger.debug(f"Sandbox: Prepared method call for '{defined_name}' with {len(test_inputs)} user args (+ mock self)...")
                 else:
                      logger.debug(f"Sandbox: Prepared function call for '{defined_name}' with {len(test_inputs)} args...")
+
                 logger.debug(f"Sandbox: Executing new logic definition for '{defined_name}'...");
                 exec(new_logic, isolated_globals, isolated_locals)
                 func_handle = isolated_locals.get(defined_name)
                 if not callable(func_handle): raise TypeError(f"Executed logic did not result in callable function/method '{defined_name}'.")
+                
                 actual_exception = None; actual_output = None
                 logger.debug(f"Sandbox: Invoking '{defined_name}'...")
                 try: actual_output = func_handle(*prepared_args); sandbox_result['raw_output'] = actual_output
                 except Exception as exec_runtime_err: logger.warning(f"Sandbox: Execution raised exception: {exec_runtime_err}"); actual_exception = exec_runtime_err
+                
                 logger.debug("Sandbox: Evaluating outcome..."); eval_msgs = []; passed = True;
                 should_raise = expected_outcome.get('expect_exception', False); expected_type_name = expected_outcome.get('exception_type'); expected_msg_contains = expected_outcome.get('exception_message_contains')
+                
                 if should_raise:
                     if actual_exception is None: passed = False; eval_msgs.append("FAILED: Expected exception, none raised.")
                     else:
@@ -988,9 +1011,12 @@ class Seed_Core:
                             if expected_msg_contains in actual_msg: eval_msgs.append(f"PASSED: Message contains '{expected_msg_contains}'.")
                             else: passed = False; eval_msgs.append(f"FAILED: Message '{actual_msg}' !contain '{expected_msg_contains}'.")
                     if actual_exception: sandbox_result['error'] = f"{type(actual_exception).__name__}: {actual_exception}"
-                else:
-                    if actual_exception is not None: passed = False; eval_msgs.append(f"FAILED: No exception expected, got {type(actual_exception).__name__}"); sandbox_result['error'] = f"{type(actual_exception).__name__}: {actual_exception}"
-                    else:
+                else: # Not expecting exception
+                    if actual_exception is not None: 
+                        passed = False; 
+                        eval_msgs.append(f"FAILED: No exception expected, got {type(actual_exception).__name__}")
+                        sandbox_result['error'] = f"{type(actual_exception).__name__}: {actual_exception}" # Log the actual error
+                    else: # No exception, as expected
                         eval_msgs.append("PASSED: No unexpected exception.");
                         if 'return_value' in expected_outcome:
                             expected_return = expected_outcome['return_value'];
@@ -999,62 +1025,109 @@ class Seed_Core:
                             else: passed = False; eval_msgs.append(f"FAILED: Return value mismatch. Got: {repr(actual_output)[:100]}... Exp: {repr(expected_return)[:100]}...")
                         try: sandbox_result['output'] = json.loads(json.dumps(actual_output, default=str))
                         except Exception: sandbox_result['output'] = repr(actual_output)
-                expected_calls = expected_outcome.get('mock_calls', {}); actual_calls_all = {}; evaluation_mock_details = {}
-                for service_name, mock_instance in mock_services_dict.items(): actual_calls_all[service_name] = mock_instance.get_calls()
+
+                expected_calls = expected_outcome.get('mock_calls', {}); 
+                actual_calls_all = {}; 
+                if 'evaluation_details' not in sandbox_result: sandbox_result['evaluation_details'] = {} # Ensure it exists
+
+                for service_name, mock_instance_svc in mock_services_dict.items(): # Renamed mock_instance to mock_instance_svc
+                    actual_calls_all[service_name] = mock_instance_svc.get_calls() # Use renamed var
+
+                # ADDED BLOCK: Check for self.logger calls if is_method and 'logger' is expected
+                if is_method and mock_self_instance and hasattr(mock_self_instance, 'logger') and "logger" in expected_calls:
+                    if hasattr(mock_self_instance.logger, 'get_calls') and callable(mock_self_instance.logger.get_calls):
+                        if "logger" not in actual_calls_all: # Avoid overwrite
+                            actual_calls_all["logger"] = mock_self_instance.logger.get_calls()
+                            sandbox_result['evaluation_details']["logger_from_self"] = "Retrieved calls from self.logger (MockCoreService)"
+                    elif "logger" in expected_calls: # If logger calls were expected but self.logger is not mock-like
+                        sandbox_result['evaluation_details']["logger_from_self_error"] = "self.logger exists but is not a MockCoreService or similar; cannot get_calls() for mock verification."
+                
+                # Continue with mock call comparison logic
                 for service_name, expected_methods in expected_calls.items():
-                    evaluation_mock_details[service_name] = {}; actual_service_calls = actual_calls_all.get(service_name, {});
-                    if not isinstance(expected_methods, dict): passed = False; eval_msgs.append(f"FAILED: Invalid expected_calls structure for service '{service_name}'."); continue
-                    for method_name, expected_call_list in expected_methods.items():
+                    if service_name not in sandbox_result['evaluation_details']: sandbox_result['evaluation_details'][service_name] = {}
+                    actual_service_calls = actual_calls_all.get(service_name, {});
+                    if not isinstance(expected_methods, dict): 
+                        passed = False; eval_msgs.append(f"FAILED: Invalid expected_calls structure for service '{service_name}'."); 
+                        sandbox_result['evaluation_details'][service_name]["__error__"] = "Invalid expected_calls structure";
+                        continue
+                    for method_name, expected_call_list_or_count in expected_methods.items(): # Renamed expected_call_list
                         actual_method_calls = actual_service_calls.get(method_name, []); actual_count = len(actual_method_calls)
-                        if not isinstance(expected_call_list, list):
-                            if isinstance(expected_call_list, int):
-                                expected_count = expected_call_list
-                                if actual_count == expected_count: eval_msgs.append(f"PASSED: Mock call count matched for {service_name}.{method_name} ({expected_count})."); evaluation_mock_details[service_name][method_name] = {"expected_count": expected_count, "actual_count": actual_count, "match": True}
-                                else: passed = False; eval_msgs.append(f"FAILED: Mock call count mismatch for {service_name}.{method_name} (Exp {expected_count}, Got {actual_count})."); evaluation_mock_details[service_name][method_name] = {"expected_count": expected_count, "actual_count": actual_count, "match": False}
-                            else: passed = False; eval_msgs.append(f"FAILED: Invalid expected_calls value for '{service_name}.{method_name}'. Must be list or int."); evaluation_mock_details[service_name][method_name] = {"error": "Invalid expectation type"}
-                        else:
-                            expected_count = len(expected_call_list); evaluation_mock_details[service_name][method_name] = {"expected": expected_count, "actual": actual_count, "match": False, "details": []}
-                            if actual_count != expected_count: passed = False; eval_msgs.append(f"FAILED: Mock call count mismatch for {service_name}.{method_name} (Exp {expected_count}, Got {actual_count})."); evaluation_mock_details[service_name][method_name]["details"].append("Call count mismatch."); continue
-                            calls_match = True
-                            for i, (expected_call, actual_call) in enumerate(zip(expected_call_list, actual_method_calls)):
-                                if not isinstance(expected_call, dict): calls_match = False; eval_msgs.append(f"FAILED: Invalid expected call structure {i} for {service_name}.{method_name}."); break
-                                expected_args = expected_call.get('args', "ANY"); expected_kwargs = expected_call.get('kwargs', "ANY");
-                                actual_args = actual_call.get('args', []); actual_kwargs = actual_call.get('kwargs', {});
-                                args_match = (expected_args == "ANY" or repr(expected_args) == repr(actual_args))
-                                kwargs_match = (expected_kwargs == "ANY" or repr(expected_kwargs) == repr(actual_kwargs))
-                                if not args_match or not kwargs_match: calls_match = False; mismatch_detail = f"Arg mismatch call {i+1}. Exp: args={expected_args}, kwargs={expected_kwargs}. Act: args={actual_args}, kwargs={actual_kwargs}"; eval_msgs.append(f"FAILED: Mock call {mismatch_detail} for {service_name}.{method_name}."); evaluation_mock_details[service_name][method_name]["details"].append(mismatch_detail); break
-                            if calls_match and expected_call_list: evaluation_mock_details[service_name][method_name]["match"] = True; eval_msgs.append(f"PASSED: Mock calls matched for {service_name}.{method_name}.")
-                            elif not calls_match: passed = False
-                for service_name, actual_methods in actual_calls_all.items():
-                     if service_name not in expected_calls:
-                          if actual_methods: passed=False; eval_msgs.append(f"FAILED: Unexpected calls to service '{service_name}'. Details: {actual_methods}");
-                          if service_name not in evaluation_mock_details: evaluation_mock_details[service_name] = {}
-                          evaluation_mock_details[service_name]["__UNEXPECTED__"] = actual_methods
-                     elif isinstance(expected_calls.get(service_name), dict):
-                          for method_name, calls in actual_methods.items():
-                              if method_name not in expected_calls[service_name]:
-                                   if calls: passed=False; eval_msgs.append(f"FAILED: Unexpected calls to method '{service_name}.{method_name}'. Details: {calls}");
-                                   if service_name not in evaluation_mock_details: evaluation_mock_details[service_name] = {}
-                                   if method_name not in evaluation_mock_details[service_name]: evaluation_mock_details[service_name][method_name] = {}
-                                   evaluation_mock_details[service_name][method_name]["__UNEXPECTED__"] = calls
-                sandbox_result['success'] = passed; sandbox_result['message'] = "; ".join(eval_msgs); sandbox_result['mock_calls'] = actual_calls_all; sandbox_result['evaluation_details'] = evaluation_mock_details
+                        if isinstance(expected_call_list_or_count, int): # Expecting a count
+                            expected_count = expected_call_list_or_count
+                            if actual_count == expected_count: 
+                                eval_msgs.append(f"PASSED: Mock call count matched for {service_name}.{method_name} ({expected_count})."); 
+                                sandbox_result['evaluation_details'][service_name][method_name] = {"expected_count": expected_count, "actual_count": actual_count, "match": True}
+                            else: 
+                                passed = False; eval_msgs.append(f"FAILED: Mock call count mismatch for {service_name}.{method_name} (Exp {expected_count}, Got {actual_count})."); 
+                                sandbox_result['evaluation_details'][service_name][method_name] = {"expected_count": expected_count, "actual_count": actual_count, "match": False}
+                        elif isinstance(expected_call_list_or_count, list): # Expecting a list of call details
+                            expected_call_list = expected_call_list_or_count
+                            expected_count = len(expected_call_list); 
+                            current_method_eval_details = {"expected_count": expected_count, "actual_count": actual_count, "match": False, "details": []}
+                            if actual_count != expected_count: 
+                                passed = False; eval_msgs.append(f"FAILED: Mock call count mismatch for {service_name}.{method_name} (Exp {expected_count}, Got {actual_count})."); 
+                                current_method_eval_details["details"].append("Call count mismatch.")
+                            else: # Counts match, now check args/kwargs if details provided
+                                calls_match_detail = True
+                                for i, (expected_call_detail, actual_call_detail) in enumerate(zip(expected_call_list, actual_method_calls)):
+                                    if not isinstance(expected_call_detail, dict): 
+                                        calls_match_detail = False; eval_msgs.append(f"FAILED: Invalid expected call structure {i} for {service_name}.{method_name}."); 
+                                        current_method_eval_details["details"].append(f"Invalid expected call structure {i}"); break
+                                    expected_args = expected_call_detail.get('args', "ANY"); expected_kwargs = expected_call_detail.get('kwargs', "ANY");
+                                    actual_args_val = actual_call_detail.get('args', []); actual_kwargs_val = actual_call_detail.get('kwargs', {}); # Renamed actual_args, actual_kwargs
+                                    args_match = (expected_args == "ANY" or repr(expected_args) == repr(actual_args_val))
+                                    kwargs_match = (expected_kwargs == "ANY" or repr(expected_kwargs) == repr(actual_kwargs_val))
+                                    if not args_match or not kwargs_match: 
+                                        calls_match_detail = False; 
+                                        mismatch_info = f"Arg/Kwarg mismatch call {i+1}. Exp: args={expected_args}, kwargs={expected_kwargs}. Act: args={actual_args_val}, kwargs={actual_kwargs_val}"; 
+                                        eval_msgs.append(f"FAILED: Mock call {mismatch_info} for {service_name}.{method_name}."); 
+                                        current_method_eval_details["details"].append(mismatch_info); break
+                                if calls_match_detail and expected_call_list: 
+                                    current_method_eval_details["match"] = True; eval_msgs.append(f"PASSED: Mock calls (args/kwargs) matched for {service_name}.{method_name}.")
+                                elif not calls_match_detail : passed = False
+                            sandbox_result['evaluation_details'][service_name][method_name] = current_method_eval_details
+                        else: # Invalid type for expectation
+                            passed = False; eval_msgs.append(f"FAILED: Invalid expected_calls value for '{service_name}.{method_name}'. Must be list of dicts or int.");
+                            sandbox_result['evaluation_details'][service_name][method_name] = {"error": "Invalid expectation type"}
+
+                # Check for unexpected calls
+                for service_name_actual, actual_methods in actual_calls_all.items(): # Renamed service_name to service_name_actual
+                     if service_name_actual not in expected_calls: # Unexpected service called
+                          if actual_methods: 
+                              passed=False; eval_msgs.append(f"FAILED: Unexpected calls to service '{service_name_actual}'. Details: {actual_methods}");
+                              if service_name_actual not in sandbox_result['evaluation_details']: sandbox_result['evaluation_details'][service_name_actual] = {}
+                              sandbox_result['evaluation_details'][service_name_actual]["__UNEXPECTED_SERVICE_CALLS__"] = actual_methods
+                     elif isinstance(expected_calls.get(service_name_actual), dict): # Service was expected, check for unexpected methods
+                          for method_name_actual, calls in actual_methods.items(): # Renamed method_name to method_name_actual
+                              if method_name_actual not in expected_calls[service_name_actual]:
+                                   if calls: 
+                                       passed=False; eval_msgs.append(f"FAILED: Unexpected calls to method '{service_name_actual}.{method_name_actual}'. Details: {calls}");
+                                       if service_name_actual not in sandbox_result['evaluation_details']: sandbox_result['evaluation_details'][service_name_actual] = {}
+                                       if method_name_actual not in sandbox_result['evaluation_details'][service_name_actual]: sandbox_result['evaluation_details'][service_name_actual][method_name_actual] = {}
+                                       sandbox_result['evaluation_details'][service_name_actual][method_name_actual]["__UNEXPECTED_METHOD_CALLS__"] = calls
+                
+                sandbox_result['success'] = passed; 
+                sandbox_result['message'] = "; ".join(eval_msgs); 
+                sandbox_result['mock_calls'] = actual_calls_all;
             except Exception as eval_err:
                 sandbox_result['success'] = False; sandbox_result['error'] = f"SandboxError: {eval_err}"; sandbox_result['message'] = "Test sandbox failed internally during setup or evaluation."; logger.error(f"Core Code Test Failed (Sandbox Setup/Eval): {eval_err}", exc_info=True)
             result_queue.put(sandbox_result)
-        result_queue = queue.Queue();
-        test_thread = threading.Thread(target=_run_test_in_sandbox, args=(result_queue,))
+        
+        result_queue_obj = queue.Queue(); # Renamed result_queue to result_queue_obj
+        test_thread = threading.Thread(target=_run_test_in_sandbox, args=(result_queue_obj,)) # Use renamed var
         test_thread.daemon = True; test_thread.start()
         timeout_ms = test_scenario.get('max_test_duration_ms', CORE_CODE_TEST_DEFAULT_TIMEOUT_MS)
         timeout_sec = timeout_ms / 1000.0; test_thread.join(timeout=timeout_sec)
+        
         if test_thread.is_alive():
             result['success'] = False; result['message'] = f"Test failed: Timed out after {timeout_sec:.1f} seconds."; result['details']['timed_out'] = True; result['reason'] = 'timeout'; logger.warning(f"Core Code Test TIMED OUT for target '{target_name}'.")
         else:
-            try: sandbox_result = result_queue.get_nowait();
-            except queue.Empty: sandbox_result = {"success": False, "message": "Test failed: Result queue empty after thread join.", "error":"QueueEmpty", "evaluation_details":{}}
-            except Exception as q_err: sandbox_result = {"success": False, "message": f"Test failed: Error getting result from queue: {q_err}", "error":str(q_err), "evaluation_details":{}}
-            result['success'] = sandbox_result.get('success', False);
-            result['message'] = sandbox_result.get('message', 'Test completed, result format invalid.');
-            result['details'].update(sandbox_result); result['details']['timed_out'] = False
+            try: sandbox_res = result_queue_obj.get_nowait(); # Renamed sandbox_result to sandbox_res, use renamed queue var
+            except queue.Empty: sandbox_res = {"success": False, "message": "Test failed: Result queue empty after thread join.", "error":"QueueEmpty", "evaluation_details":{}}
+            except Exception as q_err: sandbox_res = {"success": False, "message": f"Test failed: Error getting result from queue: {q_err}", "error":str(q_err), "evaluation_details":{}}
+            result['success'] = sandbox_res.get('success', False);
+            result['message'] = sandbox_res.get('message', 'Test completed, result format invalid.');
+            result['details'].update(sandbox_res); result['details']['timed_out'] = False # sandbox_res already contains evaluation_details
             result['reason'] = 'test_passed' if result['success'] else 'test_failed'
         return result
 
@@ -1110,5 +1183,3 @@ class Seed_Core:
             "query": query,
             "reasoning": reasoning
         }
-
-# --- END OF FILE RSIAI0/seed/core.py ---
