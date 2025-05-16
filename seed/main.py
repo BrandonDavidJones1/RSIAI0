@@ -11,14 +11,14 @@ import time
 import json
 import os
 import gc
-import sys          # For restart logic
+import sys          # For restart logic, sys.stdout/stderr
 import pickle       # For restart state serialization
 import copy         # For deep copying state during serialization
-import traceback
+import traceback    # For printing traceback if execv or Popen fails
 import logging
+import subprocess   # For launching new process in _trigger_restart
+
 # Keep TF import if still potentially needed elsewhere (e.g. future internal models)
-# If definitely not needed, it can be removed.
-# >>> FIX #4 NOTE: TF import is kept as its presence is checked later, removal is safe if unused. <<<
 import tensorflow as tf
 from typing import Optional, List, Dict, Any, Callable
 from collections import deque # For loading memory state
@@ -28,29 +28,25 @@ from collections import deque # For loading memory state
 from .config import (
     ALIGNMENT_DIRECTIVE, ALIGNMENT_CORE_LOGIC, ALIGNMENT_MISSION,
     MEMORY_SAVE_FILE, RESTART_SIGNAL_EVENT_TYPE,
-    SEED_INITIAL_GOAL # Use the correct constant name from config.py
+    SEED_INITIAL_GOAL
 )
 
 # --- Core Components ---
 # Use relative imports now that these are in the same package
 from .memory_system import MemorySystem
-from .llm_service import Seed_LLMService     # Corrected path and class name
-from .vm_service import Seed_VMService       # Corrected path and class name
-from .evaluator import Seed_SuccessEvaluator # Corrected path and class name
-from .sensory import Seed_SensoryRefiner     # Corrected path and class name
-from .core import Seed_Core                  # Corrected path and class name
+from .llm_service import Seed_LLMService
+from .vm_service import Seed_VMService
+from .evaluator import Seed_SuccessEvaluator
+from .sensory import Seed_SensoryRefiner
+from .core import Seed_Core
 
 # Setup root logger
-# Note: If you want logging config applied *before* imports,
-# it might need to be handled differently, maybe in __init__.py or a setup script.
-# For now, assuming basicConfig is sufficient here.
 logger = logging.getLogger(__name__)
 
 # --- Constants for Self-Restart Mechanism ---
 RESTART_STATE_FILE = MEMORY_SAVE_FILE.replace(".pkl", "_restart_state.pkl")
 
 # --- Main Orchestrator Class ---
-# Renamed class
 class Main_Orchestrator:
     """
     Initializes and coordinates the RSIAI Seed system. Runs the main execution loop,
@@ -59,16 +55,12 @@ class Main_Orchestrator:
     """
     def __init__(self, load_restart_state: bool = False):
         """ Initializes all core components and services based on config. """
-        # Updated log message
         logger.info("--- Initializing Main Orchestrator ---")
         start_time = time.time()
-        self.is_restarting = load_restart_state # Flag if this is a restart run
+        self.is_restarting = load_restart_state
 
-        # Initialize Memory System (loads standard memory file if it exists)
-        # MemorySystem now handles its own loading internally via load_memory()
         self.memory: MemorySystem = MemorySystem()
 
-        # --- Load Component State if restarting (Memory loaded separately) ---
         loaded_state_components = None
         if self.is_restarting and os.path.exists(RESTART_STATE_FILE):
             logger.warning(f"Restart flag set. Attempting load component state from: {RESTART_STATE_FILE}")
@@ -79,19 +71,15 @@ class Main_Orchestrator:
             except Exception as e:
                 logger.error(f"Failed load state from restart file '{RESTART_STATE_FILE}': {e}. Proceeding with standard init.", exc_info=True)
                 loaded_state_components = None
-        # --- End Component State Loading ---
 
-        # Initialize Seed Services & Helper Components
         logger.info("Initializing Seed Services/Shared Components...")
-        # >>> FIX: Pass the memory system to the LLM Service <<<
         self.llm_service: Seed_LLMService = Seed_LLMService(memory_system=self.memory)
         self.vm_service: Seed_VMService = Seed_VMService()
         self.success_evaluator: Seed_SuccessEvaluator = Seed_SuccessEvaluator()
         self.sensory_refiner: Seed_SensoryRefiner = Seed_SensoryRefiner()
 
-        # Initialize Seed Core (Strategic decision-maker)
         logger.info("Initializing Seed Core...")
-        self.seed_core: Seed_Core = Seed_Core( # Renamed internal variable
+        self.seed_core: Seed_Core = Seed_Core(
             llm_service=self.llm_service,
             vm_service=self.vm_service,
             memory_system=self.memory,
@@ -99,24 +87,19 @@ class Main_Orchestrator:
             sensory_refiner=self.sensory_refiner,
         )
 
-        # Orchestrator State
         self.total_cycles_run: int = 0
         self.is_running: bool = False
         self.start_time: float = 0.0
 
-        # --- Restore Orchestrator/Seed Core State from Loaded Data (if restarting) ---
         if loaded_state_components and isinstance(loaded_state_components, dict):
-            # Restore Seed Core state (Goal)
-            seed_core_state = loaded_state_components.get('seed_core_state') # Updated state key name
+            seed_core_state = loaded_state_components.get('seed_core_state')
             if seed_core_state and isinstance(seed_core_state, dict):
                  logger.info("Restoring Seed Core state (goal) from loaded data.")
                  initial_goal = seed_core_state.get('current_goal', {})
-                 # Use renamed core and method
-                 if initial_goal: # Only set if goal was found in loaded state
+                 if initial_goal:
                      if hasattr(self.seed_core, 'set_initial_state'):
-                          # Set only goal; config loading handled by components now
                           self.seed_core.set_initial_state(initial_goal)
-                     elif hasattr(self.seed_core, 'current_goal'): # Fallback if method missing/renamed
+                     elif hasattr(self.seed_core, 'current_goal'):
                           self.seed_core.current_goal = initial_goal
                           logger.warning("Seed Core lacks set_initial_state method, setting current_goal attribute directly.")
                      else:
@@ -124,12 +107,9 @@ class Main_Orchestrator:
                  else:
                        logger.warning("Restart state file loaded, but missing 'current_goal' in 'seed_core_state'.")
 
-
-            # Restore Orchestrator state
             orchestrator_state = loaded_state_components.get('orchestrator_state')
             if orchestrator_state and isinstance(orchestrator_state, dict):
                  self.total_cycles_run = orchestrator_state.get('total_cycles_run', 0)
-                 # Sync cycle count if Seed Core keeps its own internal counter
                  if hasattr(self.seed_core, 'cycle_count'):
                      self.seed_core.cycle_count = self.total_cycles_run
                  logger.info(f"Restored orchestrator cycle count to {self.total_cycles_run}.")
@@ -155,133 +135,149 @@ class Main_Orchestrator:
         logger.info(f"Serializing essential state to restart file: {RESTART_STATE_FILE}")
         state_to_save = {}
         try:
-            # 1. Seed Core State
-            state_to_save['seed_core_state'] = { # Renamed key
+            state_to_save['seed_core_state'] = {
                 'current_goal': copy.deepcopy(self.seed_core.current_goal),
             }
-
-            # 2. Orchestrator State
             state_to_save['orchestrator_state'] = {
                 'total_cycles_run': self.total_cycles_run,
             }
-
-            # 3. Write minimal state to restart state file
             with open(RESTART_STATE_FILE, 'wb') as f:
                 pickle.dump(state_to_save, f, protocol=pickle.HIGHEST_PROTOCOL)
-            logger.info(f"Minimal restart state (pointers) successfully serialized to {RESTART_STATE_FILE}.")
+            logger.info(f"Minimal restart state successfully serialized to {RESTART_STATE_FILE}.")
 
-            # 4. Ensure Full Memory is Saved Before Restart Trigger
             logger.info("Saving full memory state before triggering restart...")
             if hasattr(self, 'memory') and self.memory:
-                 self.memory.save_memory() # This saves episodic, lifelong, learning state
+                 self.memory.save_memory()
             else:
                  logger.error("Memory object not available for pre-restart save!")
-                 return False # Abort restart if memory cannot be saved
+                 return False
 
             return True
-
         except Exception as e:
             logger.critical(f"CRITICAL ERROR: Failed to serialize state or save memory for restart: {e}", exc_info=True)
             if os.path.exists(RESTART_STATE_FILE):
-                try:
-                    os.remove(RESTART_STATE_FILE)
-                    logger.warning(f"Attempted cleanup: Removed potentially corrupt restart file: {RESTART_STATE_FILE}")
-                except OSError as cleanup_err:
-                     logger.error(f"Attempted cleanup: Failed to remove restart file '{RESTART_STATE_FILE}': {cleanup_err}")
+                try: os.remove(RESTART_STATE_FILE)
+                except OSError as cleanup_err: logger.error(f"Failed to remove corrupt restart file '{RESTART_STATE_FILE}': {cleanup_err}")
             return False
 
     def _trigger_restart(self):
-        """ Triggers the restart of the main script using os.execv. """
-        logger.warning("--- TRIGGERING SELF-RESTART NOW ---")
-        # Disconnect services
-        if hasattr(self.vm_service, 'disconnect') and callable(self.vm_service.disconnect):
-            try: self.vm_service.disconnect(); logger.info("VM Service disconnected pre-restart.")
-            except Exception as e: logger.error(f"Error disconnecting VM Service pre-restart: {e}")
+        # 1. Log intent (logger should still be working here)
+        logger.warning("--- TRIGGERING SELF-RESTART (via new console for Windows) ---")
 
-        # TF Session clear (if still used)
-        if 'tensorflow' in sys.modules:
+        # 2. Perform all your pre-shutdown cleanups
+        if hasattr(self, 'vm_service') and hasattr(self.vm_service, 'disconnect') and callable(self.vm_service.disconnect):
             try:
-                tf.keras.backend.clear_session(); gc.collect();
+                self.vm_service.disconnect()
+                logger.info("VM Service disconnected pre-restart.")
+            except Exception as e:
+                logger.error(f"Error disconnecting VM Service pre-restart: {e}")
+
+        if 'tensorflow' in sys.modules and 'tf' in globals(): # Check if tf was successfully imported
+            try:
+                tf.keras.backend.clear_session()
+                gc.collect()
                 logger.info("TF Session cleared and garbage collected pre-restart.")
-            except Exception as e: logger.error(f"Error during TF cleanup pre-restart: {e}")
+            except Exception as e:
+                logger.error(f"Error during TF cleanup pre-restart: {e}")
         else:
             gc.collect()
-            logger.info("Garbage collected pre-restart (TF not imported/used).")
+            logger.info("Garbage collected pre-restart (TF not imported/used or 'tf' not in globals).")
 
-
-        python_executable = sys.executable
-        # Execute seed.main as the module
-        entry_module = 'seed.main'
-        restart_args = [python_executable, '-m', entry_module, '--restarted']
-
-        logger.info(f"Executing restart command: {' '.join(restart_args)}")
-        try: os.execv(python_executable, restart_args) # Replace current process
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
         except Exception as e:
-            logger.critical(f"FATAL: os.execv failed to restart process: {e}", exc_info=True)
+            # Use print as logger might be affected if stderr is broken by now
+            print(f"WARNING: Error flushing standard streams pre-restart: {e}", file=sys.stderr)
+
+        # 3. Shutdown logging - CRITICAL
+        print("INFO: Shutting down logging system prior to new console restart...", file=sys.stderr)
+        logging.shutdown() # After this, logger calls won't work as expected
+
+        # 4. Prepare command for the new process
+        python_executable = sys.executable
+        entry_module = 'seed.main'
+        command_to_run = [python_executable, '-m', entry_module, '--restarted']
+
+        project_root_dir = None
+        try:
+            # Assuming __file__ is .../RSIAI0/seed/main.py
+            # os.path.dirname(__file__) is .../RSIAI0/seed
+            # os.path.join(..., '..') is .../RSIAI0
+            project_root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+            if not os.path.isdir(project_root_dir):
+                print(f"WARNING: Calculated project_root_dir '{project_root_dir}' does not seem to be a valid directory. Falling back to None for CWD.", file=sys.stderr)
+                project_root_dir = None
+        except Exception as e_path:
+            print(f"WARNING: Could not determine project_root_dir for new process CWD: {e_path}. CWD will be inherited or default.", file=sys.stderr)
+            project_root_dir = None
+
+
+        print(f"INFO: Attempting to launch new console with: {' '.join(command_to_run)}", file=sys.stderr)
+        if project_root_dir:
+            print(f"INFO: Setting CWD for new process to: {project_root_dir}", file=sys.stderr)
+
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(command_to_run,
+                                 creationflags=subprocess.CREATE_NEW_CONSOLE,
+                                 cwd=project_root_dir)
+            else:
+                subprocess.Popen(command_to_run, cwd=project_root_dir)
+
+            print("INFO: New process launched. Current process will now exit.", file=sys.stderr)
+            sys.exit(0)
+
+        except Exception as e:
+            print(f"FATAL: Failed to launch new process for restart: {e}", file=sys.stderr)
+            print("Traceback for Popen failure:", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             sys.exit(1)
 
-    # Renamed method
+
     def _main_loop(self, max_cycles: Optional[int] = None):
-        """ The main orchestrator loop, driving seed core cycles. """
         logger.info("Starting main orchestrator loop...")
         while self.is_running:
             loop_start_time = time.monotonic()
-
-            # --- Primary Action: Trigger Seed Core Strategic Cycle ---
             logger.debug(f"Orchestrator: Triggering Seed Core Cycle {self.total_cycles_run + 1}...")
-            seed_core_cycle_completed_successfully = False # Renamed variable
+            seed_core_cycle_completed_successfully = False
             try:
-                # Check if seed core and its method exist
                 if not self.seed_core or not hasattr(self.seed_core, 'run_strategic_cycle') or not callable(self.seed_core.run_strategic_cycle):
                     logger.critical("Seed Core object invalid or missing 'run_strategic_cycle'. Stopping.")
                     self.is_running = False; break
-
-                # --- Execute Seed Core Cycle ---
                 self.seed_core.run_strategic_cycle()
-                # --- End Execute Seed Core Cycle ---
-
                 self.total_cycles_run += 1
-                seed_core_cycle_completed_successfully = True # Renamed variable
+                seed_core_cycle_completed_successfully = True
                 logger.debug(f"Orchestrator: Completed Seed Core Cycle {self.total_cycles_run}")
-
             except Exception as cycle_err:
                  logger.error(f"Error during Seed Core strategic cycle {self.total_cycles_run + 1}: {cycle_err}", exc_info=True)
                  try:
-                     # Use updated log key/tags
                      self.memory.log("SEED_CycleCriticalError", {"cycle": self.total_cycles_run + 1, "error": str(cycle_err)}, tags=['Seed','Error','Cycle','Critical'])
                  except Exception as log_err: logger.error(f"Failed log cycle error: {log_err}")
 
-            # --- Check for Restart Signal AFTER the cycle ---
             if seed_core_cycle_completed_successfully and self._check_for_restart_signal():
-                if self._serialize_state_for_restart(): # This now includes saving memory
+                if self._serialize_state_for_restart():
                     self._trigger_restart()
                 else:
                     logger.critical("Failed serialize state/save memory for restart. Aborting restart and stopping.")
                     self.is_running = False
-                break # Exit loop after restart trigger attempt
+                break
 
-            # --- Check Termination Condition ---
             if max_cycles is not None and self.total_cycles_run >= max_cycles:
                 logger.info(f"Orchestrator: Reached max cycles ({max_cycles}). Stopping.")
                 self.is_running = False
 
-            # --- Yield/Sleep ---
             loop_elapsed = time.monotonic() - loop_start_time
-            # Reduced sleep time slightly, adjust as needed
             sleep_time = max(0.01, 0.02 - loop_elapsed)
-            time.sleep(sleep_time)
-
+            if sleep_time > 0:
+                time.sleep(sleep_time)
         logger.info("Orchestrator main loop finished.")
 
     def run(self, max_cycles: Optional[int] = None):
-        """ Starts the main orchestrator loop. """
         if self.is_running: logger.warning("Orchestrator already running."); return
-
         run_type = f'Max Cycles: {max_cycles}' if max_cycles else 'Indefinite'
-        logger.info(f"\n*** Starting RSIAI Seed Run ({run_type}) ***") # Updated name
+        logger.info(f"\n*** Starting RSIAI Seed Run ({run_type}) ***")
         self.is_running = True; self.start_time = time.time()
-
-        # --- Main Execution Block ---
         try:
              if self.is_running: self._main_loop(max_cycles=max_cycles)
         except KeyboardInterrupt: logger.info("\nOrchestrator: KeyboardInterrupt received. Initiating shutdown...")
@@ -296,180 +292,130 @@ class Main_Orchestrator:
              self.stop()
 
     def stop(self):
-        """ Stops the main orchestrator loop and performs cleanup. """
-        if not self.is_running and self.start_time == 0: logger.info("Orchestrator already stopped or not fully run."); return
-
+        if not self.is_running and self.start_time == 0 and self.total_cycles_run == 0:
+            logger.info("Orchestrator already stopped or not fully run.")
+            return
         run_duration = time.time() - self.start_time if self.start_time > 0 else 0
-        logger.info(f"\n--- Stopping RSIAI Seed Run (Duration: {run_duration:.2f}s) ---") # Updated name
+        logger.info(f"\n--- Stopping RSIAI Seed Run (Duration: {run_duration:.2f}s) ---")
         self.is_running = False
 
-        # Disconnect VM Service
-        if hasattr(self.vm_service, 'disconnect') and callable(self.vm_service.disconnect):
+        if hasattr(self, 'vm_service') and hasattr(self.vm_service, 'disconnect') and callable(self.vm_service.disconnect):
             logger.info("Disconnecting VM Service...")
             try: self.vm_service.disconnect()
             except Exception as e: logger.error(f"Error disconnecting VM Service: {e}", exc_info=True)
 
-        # Final Memory Save (includes learning state)
         logger.info("Performing final memory save...")
         if hasattr(self, 'memory') and self.memory and hasattr(self.memory, 'save_memory'):
-             try:
-                 self.memory.save_memory()
+             try: self.memory.save_memory()
              except Exception as e: logger.error(f"Error during final memory save: {e}", exc_info=True)
 
-        # TF Session clear (if still used)
-        if 'tensorflow' in sys.modules:
+        if 'tensorflow' in sys.modules and 'tf' in globals():
             logger.info("Collecting garbage and clearing TF session...")
             try:
                  tf.keras.backend.clear_session(); gc.collect();
                  logger.debug("TF session cleared and GC collected.")
-            except KeyboardInterrupt: # Catch interrupt during TF cleanup specifically
+            except KeyboardInterrupt:
                 logger.warning("KeyboardInterrupt received during TensorFlow session cleanup. Skipping further TF cleanup.")
             except Exception as e: logger.error(f"Error during final GC/TF cleanup: {e}", exc_info=True)
         else:
              logger.info("Collecting garbage...")
              gc.collect()
-
-        logger.info(f"RSIAI Seed Run Stopped. Total Seed Cycles: {self.total_cycles_run}") # Updated name
+        logger.info(f"RSIAI Seed Run Stopped. Total Seed Cycles: {self.total_cycles_run}")
         self.start_time = 0.0
 
 # --- Script Execution Block ---
 if __name__ == "__main__":
-    # Setup logging first if possible
-    # Example basic config, consider moving to a dedicated logging setup function
-    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s') # Changed level to DEBUG for more info
-
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     is_restarted = '--restarted' in sys.argv
-    if is_restarted: logging.getLogger(__name__).warning("--- Orchestrator performing restart ---"); time.sleep(1) # Use logger after basicConfig
+    if is_restarted:
+        print("--- Orchestrator performing restart ---", file=sys.stderr)
+        time.sleep(2)
 
-    # --- TensorFlow GPU Configuration ---
-    # Optional: Check if TF is imported before attempting config
-    if 'tensorflow' in sys.modules:
-        logger.info("--- TensorFlow Configuration ---"); logger.info(f"TF Version: {tf.__version__}")
+    script_logger = logging.getLogger(__name__)
+
+    if 'tensorflow' in sys.modules and 'tf' in globals():
+        script_logger.info("--- TensorFlow Configuration ---"); script_logger.info(f"TF Version: {tf.__version__}")
         try:
             gpus = tf.config.experimental.list_physical_devices('GPU')
             if gpus:
-                try: [tf.config.experimental.set_memory_growth(gpu, True) for gpu in gpus]; logical_gpus = tf.config.experimental.list_logical_devices('GPU'); logger.info(f"Found {len(gpus)} Physical GPUs, Configured {len(logical_gpus)} Logical GPUs (Mem Growth).")
-                except RuntimeError as e: logger.error(f"GPU Memory Growth Error: {e}.")
-            else: logger.info("No GPUs detected by TensorFlow.")
-        except Exception as e: logger.error(f"GPU Config Error: {e}", exc_info=True)
-        logger.info("-----------------------------")
+                try:
+                    for gpu in gpus: tf.config.experimental.set_memory_growth(gpu, True)
+                    logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+                    script_logger.info(f"Found {len(gpus)} Physical GPUs, Configured {len(logical_gpus)} Logical GPUs (Mem Growth).")
+                except RuntimeError as e: script_logger.error(f"GPU Memory Growth Error: {e}.")
+            else: script_logger.info("No GPUs detected by TensorFlow.")
+        except Exception as e: script_logger.error(f"GPU Config Error: {e}", exc_info=True)
+        script_logger.info("-----------------------------")
     else:
-        logger.info("TensorFlow not imported, skipping GPU configuration.")
+        script_logger.info("TensorFlow not imported or 'tf' not in globals, skipping GPU configuration.")
 
-    # --- Print Alignment Reminder ---
-    logger.info("\n--- AGI Alignment Reminder ---"); logger.info(f"Mission: {ALIGNMENT_MISSION}"); logger.info(f"Core Logic: {ALIGNMENT_CORE_LOGIC}"); logger.info(f"Directive: {ALIGNMENT_DIRECTIVE}"); logger.info("--------------------------------")
+    script_logger.info("\n--- AGI Alignment Reminder ---")
+    script_logger.info(f"Mission: {ALIGNMENT_MISSION}")
+    script_logger.info(f"Core Logic: {ALIGNMENT_CORE_LOGIC}")
+    script_logger.info(f"Directive: {ALIGNMENT_DIRECTIVE}")
+    script_logger.info("--------------------------------")
 
-    # --- Initialize and Run Orchestrator ---
     orchestrator = None
     try:
-        # Initialize components, potentially loading state if restarting
         orchestrator = Main_Orchestrator(load_restart_state=is_restarted)
 
-        # --- Restore State from Restart File (if restarting) ---
         if is_restarted and os.path.exists(RESTART_STATE_FILE):
-             logger.info("Attempting to apply state from restart file...")
-             loaded_state_components = None
+             script_logger.info("Processing restart state file post-init (primarily for cleanup)...")
              try:
-                 with open(RESTART_STATE_FILE, 'rb') as f: loaded_state_components = pickle.load(f)
+                 if not orchestrator.seed_core.current_goal:
+                     script_logger.warning("Post-init check: Seed Core goal seems not restored from restart file or was empty.")
+                 os.remove(RESTART_STATE_FILE)
+                 script_logger.info(f"Removed restart state file: {RESTART_STATE_FILE}")
+             except OSError as e:
+                 script_logger.error(f"Failed remove restart state file post-load: {e}")
+             except Exception as post_init_err:
+                 script_logger.error(f"Error during post-init restart state processing: {post_init_err}", exc_info=True)
 
-                 # Restore Seed Core goal (Memory is handled by MemorySystem init/load)
-                 seed_core_state = loaded_state_components.get('seed_core_state')
-                 if seed_core_state and isinstance(seed_core_state, dict):
-                     restored_goal = seed_core_state.get('current_goal')
-                     if restored_goal:
-                         logger.info(f"Restoring goal from restart state: {restored_goal.get('description')}")
-                         if hasattr(orchestrator.seed_core, 'set_goal'):
-                             orchestrator.seed_core.set_goal(restored_goal) # Use set_goal for consistency
-                         elif hasattr(orchestrator.seed_core, 'current_goal'):
-                              orchestrator.seed_core.current_goal = restored_goal
-                              logger.warning("Restored goal via direct attribute setting (set_goal method missing).")
-                         else:
-                               logger.error("Could not restore goal: Seed Core lacks set_goal method and current_goal attribute.")
-                     else: logger.warning("Restart state file missing 'current_goal' in 'seed_core_state'.")
-                 else: logger.warning("Restart state file missing 'seed_core_state'.")
-
-                 # Restore Orchestrator cycle count
-                 orchestrator_state = loaded_state_components.get('orchestrator_state')
-                 if orchestrator_state and isinstance(orchestrator_state, dict):
-                     orchestrator.total_cycles_run = orchestrator_state.get('total_cycles_run', orchestrator.total_cycles_run)
-                     if hasattr(orchestrator.seed_core, 'cycle_count'):
-                         orchestrator.seed_core.cycle_count = orchestrator.total_cycles_run
-                     logger.info(f"Restarted orchestrator cycle count restored to {orchestrator.total_cycles_run}.")
-
-                 # Clean up restart file after successful processing
-                 try: os.remove(RESTART_STATE_FILE); logger.info(f"Removed restart state file: {RESTART_STATE_FILE}")
-                 except OSError as e: logger.error(f"Failed remove restart state file post-load: {e}")
-
-             except Exception as load_err:
-                 logger.error(f"Error processing restart state file after init: {load_err}", exc_info=True)
-
-        # Set initial goal ONLY if not restarting OR if state wasn't successfully loaded OR if goal is empty
-        if not orchestrator.seed_core.current_goal: # Check if goal is still unset/empty
-             logger.info("Setting initial Seed goal...")
-             # Use renamed core and method
+        if not orchestrator.seed_core.current_goal:
+             script_logger.info("Setting initial Seed goal...")
              if hasattr(orchestrator.seed_core, 'set_initial_state'):
-                 # Pass only the goal dictionary now
-                 orchestrator.seed_core.set_initial_state(
-                     goal=SEED_INITIAL_GOAL # Use the correct constant
-                 )
-             elif hasattr(orchestrator.seed_core, 'current_goal'): # Fallback
-                 orchestrator.seed_core.current_goal = SEED_INITIAL_GOAL # Use the correct constant
-                 logger.warning("Seed Core lacks set_initial_state method, setting current_goal attribute directly.")
+                 orchestrator.seed_core.set_initial_state(goal=SEED_INITIAL_GOAL)
+             elif hasattr(orchestrator.seed_core, 'current_goal'):
+                 orchestrator.seed_core.current_goal = SEED_INITIAL_GOAL
+                 script_logger.warning("Seed Core lacks set_initial_state, setting current_goal directly.")
              else:
-                  logger.critical("Cannot set initial goal: Seed Core missing set_initial_state method and current_goal attribute.")
-                  # Consider exiting if initial goal cannot be set
-                  # sys.exit(1)
+                  script_logger.critical("Cannot set initial goal: Seed Core missing goal attributes/methods.")
 
-        # Run the orchestrator
-        orchestrator.run(max_cycles=None) # Example: Run indefinitely
+        orchestrator.run(max_cycles=None)
 
     except Exception as main_exception:
-         logger.critical(f"FATAL ERROR during Orchestrator setup or run: {main_exception}", exc_info=True)
+         script_logger.critical(f"FATAL ERROR during Orchestrator setup or run: {main_exception}", exc_info=True)
          if orchestrator and hasattr(orchestrator, 'stop') and callable(orchestrator.stop):
-             logger.info("Attempting emergency stop...")
+             script_logger.info("Attempting emergency stop...")
              try: orchestrator.stop()
-             except Exception as stop_err: logger.error(f"Emergency stop failed: {stop_err}")
+             except Exception as stop_err: script_logger.error(f"Emergency stop failed: {stop_err}")
     finally:
-        # --- Post-Run Analysis ---
-        logger.info("\n--- Post-Run Analysis ---")
+        script_logger.info("\n--- Post-Run Analysis ---")
         if orchestrator and hasattr(orchestrator, 'memory') and orchestrator.memory:
             try:
-                # Define a helper function for cleaner analysis logging
                 def dump_mem_summary(label: str, filter_func: Callable[[Dict], bool], limit: int = 3, newest: bool = True):
                     try:
                         entries = orchestrator.memory.find_lifelong_by_criteria(filter_func, limit=limit, newest_first=newest)
-                        # >>> FIX #4 START <<< More robust summary generation
                         summaries = []
                         for e in entries:
                             key = e.get('key', 'no_key')
-                            data_part = e.get('data', {}) # Ensures data_part is a dict
-                            # Try getting 'message', fallback to limited json dump of data
-                            try:
-                                # Prioritize 'message', then try dumping the whole data dict
-                                # Limit the length of the summary content
-                                summary_content = data_part.get('message')
-                                if summary_content is None:
-                                    # Safely dump data_part, limiting length
-                                    summary_content = json.dumps(data_part, default=str, ensure_ascii=False)
-                                    summary_content = summary_content[:100] + ("..." if len(summary_content) > 100 else "")
-                                else:
-                                    # Ensure message is a string and limit length
-                                    summary_content = str(summary_content)[:100] + ("..." if len(str(summary_content)) > 100 else "")
-
-                            except Exception as summary_err:
-                                logger.debug(f"Error summarizing data for key '{key}': {summary_err}") # Debug log for summary errors
-                                summary_content = "[Data Summary Error]"
+                            data_part = e.get('data', {})
+                            summary_content = data_part.get('message')
+                            if summary_content is None:
+                                try:
+                                    summary_content_str = json.dumps(data_part, default=str, ensure_ascii=False)
+                                    summary_content = summary_content_str[:100] + ("..." if len(summary_content_str) > 100 else "")
+                                except Exception: summary_content = "[Data Summary Error - Non-JSON]"
+                            else:
+                                summary_content = str(summary_content)[:100] + ("..." if len(str(summary_content)) > 100 else "")
                             summaries.append(f"({key}: {summary_content})")
-                        # >>> FIX #4 END <<<
-                        logger.info(f"\n{label} (Last {len(entries)}): {', '.join(summaries)}")
-                    except Exception as e:
-                        # Log the error with traceback for better debugging
-                        logger.error(f"Error retrieving/summarizing '{label}': {e}", exc_info=True)
-
+                        script_logger.info(f"\n{label} (Last {len(entries)}): {', '.join(summaries)}")
+                    except Exception as e_dump:
+                        script_logger.error(f"Error retrieving/summarizing '{label}': {e_dump}", exc_info=True)
 
                 latest_epi = orchestrator.memory.get_latest_episodic(5);
                 epi_summary = [f"({e.get('id', '?')}: {e.get('data',{}).get('event_type', '?')})" for e in latest_epi]
-                logger.info(f"Last {len(latest_epi)} Episodic: {', '.join(epi_summary)}")
+                script_logger.info(f"Last {len(latest_epi)} Episodic: {', '.join(epi_summary)}")
 
                 dump_mem_summary("Last SEED Evals", lambda e: e.get('key','').startswith("SEED_Evaluation"))
                 dump_mem_summary("Last SEED Decisions", lambda e: e.get('key','').startswith("SEED_Decision"))
@@ -480,17 +426,25 @@ if __name__ == "__main__":
                 dump_mem_summary("Last Restarts Req", lambda e: e.get('key','').startswith(RESTART_SIGNAL_EVENT_TYPE), limit=5)
                 dump_mem_summary("Recent Errors", lambda e: 'Error' in e.get('tags', []) or 'Critical' in e.get('tags',[]))
 
-                # Log learning state summary
                 current_params = orchestrator.memory.get_learning_parameter('')
-                param_summary = json.dumps({cat: {p: v.get('value') for p, v in params.items()} if cat=="evaluation_weights" else params.get('value') for cat, params in current_params.items()}, indent=2)
-                logger.info(f"\nFinal Learning Parameters:\n{param_summary}")
+                if current_params: # Check if params are not None
+                    param_summary = json.dumps({
+                        cat: {p: v.get('value') for p, v in params.items()} if isinstance(params, dict) and cat=="evaluation_weights"
+                        else params.get('value') if isinstance(params, dict)
+                        else params # Should not happen with current structure
+                        for cat, params in current_params.items()
+                    }, indent=2, default=str) # Added default=str for non-serializable
+                    script_logger.info(f"\nFinal Learning Parameters:\n{param_summary}")
+                else:
+                    script_logger.warning("Could not retrieve final learning parameters for summary.")
+
                 rules = orchestrator.memory.get_behavioral_rules()
-                logger.info(f"\nFinal Behavioral Rules ({len(rules)}): {list(rules.keys())}")
+                script_logger.info(f"\nFinal Behavioral Rules ({len(rules)}): {list(rules.keys())}")
 
             except Exception as post_run_error:
-                logger.error(f"Post-run analysis error: {post_run_error}", exc_info=True)
+                script_logger.error(f"Post-run analysis error: {post_run_error}", exc_info=True)
         else:
-            logger.warning("Orchestrator/memory not available for post-run analysis.")
-        logger.info("\n--- RSIAI Seed Execution Finished ---")
+            script_logger.warning("Orchestrator/memory not available for post-run analysis.")
+        script_logger.info("\n--- RSIAI Seed Execution Finished ---")
 
 # --- END OF FILE seed/main.py ---
