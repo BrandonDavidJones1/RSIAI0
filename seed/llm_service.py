@@ -1,4 +1,4 @@
-# --- START OF FILE seed/llm_service.py ---
+# --- START OF FILE llm_service.py ---
 
 # RSIAI/seed/llm_service.py
 """
@@ -172,8 +172,16 @@ class Seed_LLMService:
                     alignment_directive=ALIGNMENT_DIRECTIVE
                 )
             except KeyError as ke:
-                logger.error(f"CRITICAL: Operational prompt template missing '{{alignment_directive}}' placeholder! Error: {ke}. Using default fallback prompt.")
+                # --- MODIFIED/IMPROVED ERROR LOGGING ---
+                actual_missing_key = ke.args[0] if ke.args else "unknown"
+                logger.error(
+                    f"CRITICAL: KeyError when formatting operational prompt template. "
+                    f"A value for the placeholder '{{{actual_missing_key}}}' was not supplied. "
+                    f"This means the template expected a key named '{actual_missing_key}' but it wasn't provided "
+                    f"during the .format() call. Original error: {ke}. Using default fallback prompt."
+                )
                 final_system_prompt = self.default_system_prompt # Use basic default on critical formatting error
+                # --- END OF MODIFICATION ---
             except Exception as e:
                  logger.error(f"Error constructing final system prompt: {e}. Using default fallback prompt.", exc_info=True)
                  final_system_prompt = self.default_system_prompt
@@ -285,4 +293,4 @@ class Seed_LLMService:
              # Ultimate fallback if JSON serialization itself fails
              return '{"action_type": "NO_OP", "reasoning": "Fallback: LLM query failed and fallback JSON serialization error."}'
 
-# --- END OF FILE seed/llm_service.py ---
+# --- END OF FILE llm_service.py ---

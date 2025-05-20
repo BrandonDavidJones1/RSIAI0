@@ -159,6 +159,7 @@ class MockSelf:
 
 
 class Seed_Core:
+    # TEST_COMMENT_SEED_AGI_MODIFICATION: This comment was added by the Seed AGI itself.
     """
     Core strategic component for the Seed AGI. Manages goals, interacts with the environment,
     adapts internal state, and drives RSI via core code modification, testing, and verification.
