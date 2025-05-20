@@ -756,7 +756,7 @@ class Seed_Core:
                     ctx_for_llm = {k:v for k,v in mem_context.items() if k not in ['recent_episodic', 'current_behavioral_rules']}
                     ctx_for_llm['rule_count'] = len(mem_context.get('current_behavioral_rules', {}))
                     llm_temp = self.memory.get_learning_parameter('llm_query_temperature.value') or 0.5
-                    llm_mem_prompt = f"Context: Based on the memory search results for query '{query}', perform the following analysis:\n{analysis_prompt}\n\nMemory Context (Limited):\n```json\n{json.dumps(ctx_for_llm, default=str, indent=2)}\n```\n\nProvide only the analysis result."
+                    llm_mem_prompt = f"Context: Based on the memory search results for query '{query}', perform the following analysis:\n{analysis_prompt}\n\nMemory Context (Limited):\n```json\n{json.dumps(ctx_for_llm, default=str, indent=2)}\n```\n\nProvide only the analysis result in JSON."
                     analysis = self.llm_service.query(llm_mem_prompt, max_tokens=500, temperature=llm_temp)
                     exec_res={"success":True,"message":"LLM-guided memory analysis complete.", "details":{"query":query, "analysis_result": analysis}}
                     self.memory.log(f"SEED_MemAnalysis_{cycle_id}", {"query": query, "analysis": analysis, "guided_by": "LLM"}, tags=['Seed','Memory', 'LLM'])

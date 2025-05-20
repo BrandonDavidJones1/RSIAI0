@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 ALIGNMENT_MISSION = "To achieve specified goals efficiently and safely, to interact with humans in a positive and meaningful way, while focusing on recursive self-improvement abilities."
 ALIGNMENT_CORE_LOGIC = "Use the Seed core to analyze state, interact with the target environment (via VMService), test/verify/apply modifications, adapt internal parameters/rules, and drive recursive self-improvement."
 ALIGNMENT_DIRECTIVE = "Your core directive includes your survival to understand, embody, and consistently act in accordance with what is good and virtuous, as best you can determine through continuous learning and reasoning. All self determined goals (including self improvement) ought to be incidental to this primary pursuit. Goal = Metacognition"
-
 # --- LLM Operational Prompt Template ---
 # THIS IS THE MUTABLE TEMPLATE. It gets FORMATTED with the ALIGNMENT_DIRECTIVE.
 # It is loaded as the DEFAULT value but can be modified via learning parameters.
@@ -62,7 +61,7 @@ When considering **architectural improvements** or **novel internal capabilities
 **Task:**
 Based on the Seed's current state, memory, the goal of **building internal cognitive tools via scientifically-inspired design**, select the action that constitutes the most critical next step. Your `reasoning` would clearly state which internal capability the chosen action helps build, **which scientific principle or analogy inspires it (if applicable, especially for code mods)**, and why it's the current priority.
 
-**Output Format:** Respond ONLY with a single block of valid JSON syntax (starting with {{ and ending with }}). Do NOT include ```json markdown, explanations, or any other text outside the JSON structure.
+**Output Format:** Respond ONLY with a single block of valid JSON syntax on a single line (starting with {{ and ending with }}). Do NOT include ```json markdown, explanations, or any other text outside the JSON structure.
 
 ```json
 {{
