@@ -190,6 +190,7 @@ class Seed_Core:
             ]
         self.available_actions: List[str] = [
             "EXECUTE_VM_COMMAND",
+            "SET_VM_MODE",
             "UPDATE_GOAL",
             "ANALYZE_MEMORY",
             "TEST_CORE_CODE_MODIFICATION",
@@ -699,7 +700,11 @@ class Seed_Core:
                 if not isinstance(expected_outcome, dict): raise ValueError("TEST_CORE_CODE_MODIFICATION: Missing/invalid 'expected_outcome' (dict) in 'test_scenario'.")
                 if not isinstance(expected_outcome.get("expect_exception", False), bool): raise ValueError("TEST_CORE_CODE_MODIFICATION: Invalid 'expect_exception' (bool) in 'expected_outcome'.")
                 if "return_value" not in expected_outcome and not expected_outcome.get("expect_exception"): raise ValueError("TEST_CORE_CODE_MODIFICATION: 'expected_outcome' must contain 'return_value' or set 'expect_exception:true'.")
-                if expected_outcome.get("mock_calls") and not isinstance(expected_outcome["mock_calls"], dict): raise ValueError("TEST_CORE_CODE_MODIFICATION: Invalid 'mock_calls' (dict) in 'expected_outcome'.")
+                if expected_outcome.get("mock_calls") and not isinstance(expected_outcome["mock_calls"], dict): raise ValueError("TEST_CORE_CODE_MODIFICATION: Invalid 'mock_calls' (dict) in 'expected_outcome'.")       
+            elif action_type == "SET_VM_MODE":
+                logger.warning(f"SET_VM_MODE action received but not fully implemented. Params: {action_params}")
+                exec_res = {"success": False, "message": "SET_VM_MODE handler is a stub and not fully implemented.", "reason": "not_implemented"}
+                log_tags.append('VMMode')
             elif action_type == "VERIFY_CORE_CODE_CHANGE":
                 file_path_verify = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path_verify, str) or not file_path_verify: raise ValueError("VERIFY_CORE_CODE_CHANGE: Missing/invalid 'filepath', 'file_path', or 'path'.")
