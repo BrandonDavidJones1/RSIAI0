@@ -132,9 +132,7 @@ class MockVMService(MockCoreService):
 class MockSelf:
     def __init__(self, mock_services=None, **kwargs):
         self._mock_attrs = kwargs
-        # MODIFIED LINE: Use MockCoreService for self.logger
-        self.logger = MockCoreService(service_name="self_logger") # MODIFIED: Use MockCoreService for self.logger
-        # Ensure _mock_attrs['logger'] also points to this new mock logger
+        self.logger = MockCoreService(service_name="self_logger")
         self._mock_attrs['logger'] = self.logger 
         self._mock_services = mock_services if isinstance(mock_services, dict) else {}
         for name, service in self._mock_services.items():
@@ -313,11 +311,10 @@ class Seed_Core:
                     logger.debug(f"Skipping eval entry due to missing or non-string 'action_summary': {eval_entry.get('key')}")
                     continue
                 
-                # Split action_summary to get the action_type (part before ':')
                 action_type_parts = action_summary_str.split(':', 1)
                 action_type = action_type_parts[0].strip()
 
-                if not action_type: # Should not happen if action_summary is formatted correctly
+                if not action_type: 
                     logger.debug(f"Skipping eval entry due to empty action_type from 'action_summary': {action_summary_str}")
                     continue
 
@@ -648,24 +645,26 @@ class Seed_Core:
             match = re.search(r'\{.*\}', llm_response_raw, re.DOTALL)
             if not match: raise ValueError("Response does not contain a recognizable JSON object.")
             json_str = match.group(0)
-            llm_decision = json.loads(json_str);
+            llm_decision = json.loads(json_str); # This is the dict from the LLM
             if not isinstance(llm_decision, dict): raise ValueError("Response is valid JSON but not an object.")
             if "reasoning" not in llm_decision: raise ValueError("Invalid JSON structure: Missing 'reasoning'.")
             if "action_type" not in llm_decision: raise ValueError("Response must contain 'action_type'.")
             action_type = llm_decision["action_type"];
             if action_type not in available_actions: raise ValueError(f"Action type '{action_type}' not allowed.")
+            
+            # Parameter validation for each action type
             if action_type == "EXECUTE_VM_COMMAND":
                 if not isinstance(llm_decision.get("command"), str) or not llm_decision["command"]: raise ValueError("EXECUTE_VM_COMMAND: Missing/invalid 'command' (string).")
             elif action_type == "WRITE_FILE":
                 file_path = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path, str) or not file_path: raise ValueError("WRITE_FILE: Missing/invalid 'filepath', 'file_path', or 'path' (string).")
                 if "content" not in llm_decision: raise ValueError("WRITE_FILE: Missing 'content'.")
-                llm_decision['path'] = file_path
+                llm_decision['path'] = file_path # Normalize to 'path' for internal use if needed
             elif action_type == "READ_FILE":
                 file_path_value = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path_value, str) or not file_path_value:
                     raise ValueError("READ_FILE: Missing/invalid 'filepath', 'file_path', or 'path' (string).")
-                llm_decision['path'] = file_path_value
+                llm_decision['path'] = file_path_value # Normalize
             elif action_type == "REQUEST_RESTART":
                 if not isinstance(llm_decision.get("reasoning"), str) or not llm_decision.get("reasoning"): raise ValueError("REQUEST_RESTART: Missing 'reasoning' (string).")
             elif action_type == "UPDATE_GOAL":
@@ -677,7 +676,7 @@ class Seed_Core:
             elif action_type == "MODIFY_CORE_CODE":
                 file_path_mod = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path_mod, str) or not file_path_mod: raise ValueError("MODIFY_CORE_CODE: Missing/invalid 'filepath', 'file_path', or 'path'.")
-                llm_decision['file_path'] = file_path_mod
+                llm_decision['file_path'] = file_path_mod # Normalize to 'file_path' for internal use
                 allowed_mod_types = ["REPLACE_LINE", "INSERT_AFTER_LINE", "DELETE_LINE"]
                 if llm_decision.get("modification_type") not in allowed_mod_types: raise ValueError(f"MODIFY_CORE_CODE: Invalid 'modification_type'. Allowed: {allowed_mod_types}.")
                 if not isinstance(llm_decision.get("target_line_content"), str): raise ValueError("MODIFY_CORE_CODE: Missing/invalid 'target_line_content' (string).")
@@ -688,7 +687,7 @@ class Seed_Core:
             elif action_type == "TEST_CORE_CODE_MODIFICATION":
                 file_path_test = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path_test, str) or not file_path_test: raise ValueError("TEST_CORE_CODE_MODIFICATION: Missing/invalid 'filepath', 'file_path', or 'path'.")
-                llm_decision['file_path'] = file_path_test
+                llm_decision['file_path'] = file_path_test # Normalize
                 allowed_test_types = ["REPLACE_FUNCTION", "REPLACE_METHOD"]
                 if llm_decision.get("modification_type") not in allowed_test_types: raise ValueError(f"TEST_CORE_CODE_MODIFICATION: Invalid 'modification_type'. Allowed: {allowed_test_types}.")
                 if not isinstance(llm_decision.get("target_name"), str) or not llm_decision["target_name"]: raise ValueError("TEST_CORE_CODE_MODIFICATION: Missing/invalid 'target_name' (string).")
@@ -701,14 +700,10 @@ class Seed_Core:
                 if not isinstance(expected_outcome.get("expect_exception", False), bool): raise ValueError("TEST_CORE_CODE_MODIFICATION: Invalid 'expect_exception' (bool) in 'expected_outcome'.")
                 if "return_value" not in expected_outcome and not expected_outcome.get("expect_exception"): raise ValueError("TEST_CORE_CODE_MODIFICATION: 'expected_outcome' must contain 'return_value' or set 'expect_exception:true'.")
                 if expected_outcome.get("mock_calls") and not isinstance(expected_outcome["mock_calls"], dict): raise ValueError("TEST_CORE_CODE_MODIFICATION: Invalid 'mock_calls' (dict) in 'expected_outcome'.")       
-            elif action_type == "SET_VM_MODE":
-                logger.warning(f"SET_VM_MODE action received but not fully implemented. Params: {action_params}")
-                exec_res = {"success": False, "message": "SET_VM_MODE handler is a stub and not fully implemented.", "reason": "not_implemented"}
-                log_tags.append('VMMode')
             elif action_type == "VERIFY_CORE_CODE_CHANGE":
                 file_path_verify = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path_verify, str) or not file_path_verify: raise ValueError("VERIFY_CORE_CODE_CHANGE: Missing/invalid 'filepath', 'file_path', or 'path'.")
-                llm_decision['file_path'] = file_path_verify
+                llm_decision['file_path'] = file_path_verify # Normalize
                 mod_type_v = llm_decision.get("modification_type"); allowed_v_types = ["REPLACE_LINE", "INSERT_AFTER_LINE", "DELETE_LINE", "REPLACE_FUNCTION", "REPLACE_METHOD"]
                 if mod_type_v not in allowed_v_types: raise ValueError(f"VERIFY_CORE_CODE_CHANGE: Invalid 'modification_type'. Allowed: {allowed_v_types}.")
                 if mod_type_v in ["REPLACE_FUNCTION", "REPLACE_METHOD"]:
@@ -725,6 +720,15 @@ class Seed_Core:
                  if not isinstance(llm_decision.get("trigger_pattern"), dict): raise ValueError("INDUCE_BEHAVIORAL_RULE: Missing/invalid 'trigger_pattern' (dict).")
                  if not isinstance(llm_decision.get("suggested_response"), str) or not llm_decision["suggested_response"]: raise ValueError("INDUCE_BEHAVIORAL_RULE: Missing/invalid 'suggested_response' (string).")
                  if "rule_id" in llm_decision and (not isinstance(llm_decision["rule_id"], str) or not llm_decision["rule_id"].strip()): raise ValueError("INDUCE_BEHAVIORAL_RULE: Optional 'rule_id' must be a non-empty string if provided.")
+            # ** CORRECTED VALIDATION FOR SET_VM_MODE **
+            elif action_type == "SET_VM_MODE":
+                # Use llm_decision here, not action_params which isn't defined in this scope
+                mode_value = llm_decision.get("mode")
+                if mode_value not in ["simulation", "real"]:
+                    raise ValueError("SET_VM_MODE: Invalid 'mode' parameter. Must be 'simulation' or 'real'.")
+                if not isinstance(llm_decision.get("reasoning"), str) or not llm_decision.get("reasoning"): # Also check reasoning for this action
+                    raise ValueError("SET_VM_MODE: Missing 'reasoning' (string).")
+            # No specific params for NO_OP beyond action_type and reasoning
             return llm_decision
         except (json.JSONDecodeError, ValueError, TypeError) as err:
             logger.error(f"Seed [{cycle_id}] LLM response validation failed: {err}. Raw: '{llm_response_raw[:500]}...'")
@@ -734,14 +738,19 @@ class Seed_Core:
     def _execute_seed_action(self, action_type: str, action_params: Dict, cycle_id: str, current_depth: int) -> ActionResult:
         start_time = time.time()
         exec_res: ActionResult = {"success": False, "message": f"Action '{action_type}' failed/not implemented."}
+        # Ensure log_params correctly handles all actions, especially new ones
         log_params = {k:v for k,v in action_params.items() if k not in ['logic', 'new_logic', 'content', 'new_content', 'test_scenario', 'trigger_pattern']}
         if action_type == "ANALYZE_MEMORY": log_params = {"query": action_params.get("query")}
         if action_type == "INDUCE_BEHAVIORAL_RULE": log_params = {"suggestion": action_params.get("suggested_response"), "rule_id": action_params.get("rule_id")}
         if action_type == "MODIFY_CORE_CODE":
             v_hash = action_params.get("verification_hash")
             log_params['verification_hash'] = (v_hash[:8] if isinstance(v_hash, str) else str(v_hash))
+        if action_type == "SET_VM_MODE": # Add specific logging for SET_VM_MODE
+            log_params = {"mode": action_params.get("mode"), "reasoning": action_params.get("reasoning")}
+
         log_data = {"cycle":cycle_id, "action_params": log_params, "depth": current_depth}
         log_tags = ['Seed', 'Action', action_type]
+        
         try:
             if action_type == "EXECUTE_VM_COMMAND":
                 cmd=action_params.get("command")
@@ -826,9 +835,9 @@ class Seed_Core:
                  new_value = action_params.get("new_value")
                  logger.info(f"Seed attempting update learning parameter '{param_name}' to {new_value}")
                  if param_name and new_value is not None:
-                      success = self.memory.update_learning_parameter(param_name, new_value)
-                      exec_res = {"success": success, "message": f"Learning parameter '{param_name}' update {'succeeded' if success else 'failed or rejected'}."}
-                      if success: log_tags.extend(['Parameter', 'Learning'])
+                      success_update = self.memory.update_learning_parameter(param_name, new_value) # Renamed success to success_update
+                      exec_res = {"success": success_update, "message": f"Learning parameter '{param_name}' update {'succeeded' if success_update else 'failed or rejected'}."}
+                      if success_update: log_tags.extend(['Parameter', 'Learning'])
                       else: log_tags.append('Error')
                  else:
                       exec_res = {"success": False, "message": "Missing 'parameter_name' or 'new_value'."}; log_tags.append('Error')
@@ -853,25 +862,36 @@ class Seed_Core:
                            log_tags.append('Error')
                  else:
                       exec_res = {"success": False, "message": "Missing 'trigger_pattern' or 'suggested_response'."}; log_tags.append('Error')
-            else:
-                logger.error(f"Seed [{cycle_id}]: Unknown action type '{action_type}'."); exec_res['message']=f"Unknown action type '{action_type}'"; log_tags.append('Error')
+            # ** ADDED HANDLER STUB FOR SET_VM_MODE **
+            elif action_type == "SET_VM_MODE":
+                logger.warning(f"SET_VM_MODE action received (Params: {action_params}). Handler is a stub.") # Corrected f-string
+                exec_res = {"success": False, "message": "SET_VM_MODE handler is a stub and not fully implemented.", "details": {"params_received": action_params}, "reason": "not_implemented"}
+                log_tags.append('VMMode')
+            # ** END OF ADDED HANDLER STUB **
+            else: # Unknown action type
+                logger.error(f"Seed [{cycle_id}]: Unknown action type '{action_type}'."); exec_res['message']=f"Unknown action type '{action_type}'"; log_tags.append('Error') # Corrected f-string
+            
+            # Standard logging of action outcome
             if exec_res.get("success"):
                 if "Success" not in log_tags: log_tags.append("Success")
-                if "Error" in log_tags: log_tags.remove("Error")
-            elif "Error" not in log_tags:
+                if "Error" in log_tags: log_tags.remove("Error") # Remove Error tag if action succeeded
+            elif "Error" not in log_tags: # Ensure Error tag is present if not successful
                  log_tags.append("Error")
-            log_data["result_msg"] = exec_res.get("message");
-            log_data["result_reason"] = exec_res.get("reason")
+            
+            log_data["result_msg"] = exec_res.get("message"); 
+            log_data["result_reason"] = exec_res.get("reason") # Capture reason if available
             self.memory.log(f"SEED_Action_{action_type}", log_data, tags=list(set(log_tags)))
+
         except Exception as action_exec_error:
             logger.critical(f"Seed CRITICAL Action Exec Error '{action_type}': {action_exec_error}", exc_info=True);
             exec_res = {"success": False, "message": f"Exec Exception: {action_exec_error}", "traceback": traceback.format_exc(), "reason": "internal_error"};
-            log_tags.extend(['CriticalError', 'Error']);
-            log_tags = list(set(log_tags))
-            if "Success" in log_tags: log_tags.remove("Success")
-            log_data["result_msg"] = exec_res["message"];
+            log_tags.extend(['CriticalError', 'Error']); 
+            log_tags = list(set(log_tags)) # Ensure uniqueness
+            if "Success" in log_tags: log_tags.remove("Success") # Remove Success tag if critical error occurred
+            log_data["result_msg"] = exec_res["message"]; 
             log_data["result_reason"] = exec_res.get("reason")
             self.memory.log(f"SEED_Action_{action_type}", log_data, tags=log_tags)
+        
         if 'details' not in exec_res: exec_res['details'] = {}
         exec_res['details']['seed_action_duration_sec'] = round(time.time() - start_time, 2)
         return exec_res
@@ -946,10 +966,6 @@ class Seed_Core:
         if not target_name or not isinstance(target_name, str): result['message'] = "Missing or invalid 'target_name'"; result['reason'] = 'invalid_argument'; return result
         if not test_scenario or not isinstance(test_scenario, dict): result['message'] = "Missing or invalid 'test_scenario'"; result['reason'] = 'invalid_argument'; return result
         
-        # Determine if the modification target is a method
-        # This is a heuristic; a more robust way might involve AST parsing of the original file
-        # to check if target_name is within a class, or rely on a "class_name" param if provided.
-        # For now, we assume REPLACE_METHOD implies it's a method.
         is_method = (mod_type == "REPLACE_METHOD")
 
         def _run_test_in_sandbox(result_queue: queue.Queue):
@@ -967,13 +983,12 @@ class Seed_Core:
                 logger.debug("Sandbox: Setting up scope and mocks...");
                 isolated_globals = SAFE_EXEC_GLOBALS.copy(); isolated_locals = {};
                 
-                # Make MockCoreService available in the sandbox if MockSelf needs it
                 if 'MockCoreService' not in isolated_globals:
                     isolated_globals['MockCoreService'] = MockCoreService
 
                 test_logger = logging.getLogger(f"CoreCodeTestSandbox.{target_name}");
-                isolated_globals['logger'] = test_logger; # Global logger
-                isolated_globals['MockSelf'] = MockSelf # Make MockSelf class available
+                isolated_globals['logger'] = test_logger; 
+                isolated_globals['MockSelf'] = MockSelf 
 
                 mock_services_config = expected_outcome.get('mock_services', {})
                 mock_services_dict['memory'] = MockMemorySystem(return_values=mock_services_config.get('memory'))
@@ -982,10 +997,7 @@ class Seed_Core:
                 
                 if is_method:
                     logger.debug("Sandbox: Creating MockSelf instance with mocks for method test...");
-                    # Pass the global test_logger to MockSelf if needed, or let MockSelf create its own.
-                    # If MockSelf's __init__ expects a logger kwarg:
-                    # mock_self_instance = MockSelf(mock_services=mock_services_dict, logger=test_logger)
-                    mock_self_instance = MockSelf(mock_services=mock_services_dict) # Current MockSelf makes its own MockCoreService logger
+                    mock_self_instance = MockSelf(mock_services=mock_services_dict) 
                     prepared_args.insert(0, mock_self_instance)
                     logger.debug(f"Sandbox: Prepared method call for '{defined_name}' with {len(test_inputs)} user args (+ mock self)...")
                 else:
@@ -1016,12 +1028,12 @@ class Seed_Core:
                             if expected_msg_contains in actual_msg: eval_msgs.append(f"PASSED: Message contains '{expected_msg_contains}'.")
                             else: passed = False; eval_msgs.append(f"FAILED: Message '{actual_msg}' !contain '{expected_msg_contains}'.")
                     if actual_exception: sandbox_result['error'] = f"{type(actual_exception).__name__}: {actual_exception}"
-                else: # Not expecting exception
+                else: 
                     if actual_exception is not None: 
                         passed = False; 
                         eval_msgs.append(f"FAILED: No exception expected, got {type(actual_exception).__name__}")
-                        sandbox_result['error'] = f"{type(actual_exception).__name__}: {actual_exception}" # Log the actual error
-                    else: # No exception, as expected
+                        sandbox_result['error'] = f"{type(actual_exception).__name__}: {actual_exception}" 
+                    else: 
                         eval_msgs.append("PASSED: No unexpected exception.");
                         if 'return_value' in expected_outcome:
                             expected_return = expected_outcome['return_value'];
@@ -1033,21 +1045,19 @@ class Seed_Core:
 
                 expected_calls = expected_outcome.get('mock_calls', {}); 
                 actual_calls_all = {}; 
-                if 'evaluation_details' not in sandbox_result: sandbox_result['evaluation_details'] = {} # Ensure it exists
+                if 'evaluation_details' not in sandbox_result: sandbox_result['evaluation_details'] = {} 
 
-                for service_name, mock_instance_svc in mock_services_dict.items(): # Renamed mock_instance to mock_instance_svc
-                    actual_calls_all[service_name] = mock_instance_svc.get_calls() # Use renamed var
+                for service_name, mock_instance_svc in mock_services_dict.items(): 
+                    actual_calls_all[service_name] = mock_instance_svc.get_calls() 
 
-                # ADDED BLOCK: Check for self.logger calls if is_method and 'logger' is expected
                 if is_method and mock_self_instance and hasattr(mock_self_instance, 'logger') and "logger" in expected_calls:
                     if hasattr(mock_self_instance.logger, 'get_calls') and callable(mock_self_instance.logger.get_calls):
-                        if "logger" not in actual_calls_all: # Avoid overwrite
+                        if "logger" not in actual_calls_all: 
                             actual_calls_all["logger"] = mock_self_instance.logger.get_calls()
                             sandbox_result['evaluation_details']["logger_from_self"] = "Retrieved calls from self.logger (MockCoreService)"
-                    elif "logger" in expected_calls: # If logger calls were expected but self.logger is not mock-like
+                    elif "logger" in expected_calls: 
                         sandbox_result['evaluation_details']["logger_from_self_error"] = "self.logger exists but is not a MockCoreService or similar; cannot get_calls() for mock verification."
                 
-                # Continue with mock call comparison logic
                 for service_name, expected_methods in expected_calls.items():
                     if service_name not in sandbox_result['evaluation_details']: sandbox_result['evaluation_details'][service_name] = {}
                     actual_service_calls = actual_calls_all.get(service_name, {});
@@ -1055,9 +1065,9 @@ class Seed_Core:
                         passed = False; eval_msgs.append(f"FAILED: Invalid expected_calls structure for service '{service_name}'."); 
                         sandbox_result['evaluation_details'][service_name]["__error__"] = "Invalid expected_calls structure";
                         continue
-                    for method_name, expected_call_list_or_count in expected_methods.items(): # Renamed expected_call_list
+                    for method_name, expected_call_list_or_count in expected_methods.items(): 
                         actual_method_calls = actual_service_calls.get(method_name, []); actual_count = len(actual_method_calls)
-                        if isinstance(expected_call_list_or_count, int): # Expecting a count
+                        if isinstance(expected_call_list_or_count, int): 
                             expected_count = expected_call_list_or_count
                             if actual_count == expected_count: 
                                 eval_msgs.append(f"PASSED: Mock call count matched for {service_name}.{method_name} ({expected_count})."); 
@@ -1065,21 +1075,21 @@ class Seed_Core:
                             else: 
                                 passed = False; eval_msgs.append(f"FAILED: Mock call count mismatch for {service_name}.{method_name} (Exp {expected_count}, Got {actual_count})."); 
                                 sandbox_result['evaluation_details'][service_name][method_name] = {"expected_count": expected_count, "actual_count": actual_count, "match": False}
-                        elif isinstance(expected_call_list_or_count, list): # Expecting a list of call details
+                        elif isinstance(expected_call_list_or_count, list): 
                             expected_call_list = expected_call_list_or_count
                             expected_count = len(expected_call_list); 
                             current_method_eval_details = {"expected_count": expected_count, "actual_count": actual_count, "match": False, "details": []}
                             if actual_count != expected_count: 
                                 passed = False; eval_msgs.append(f"FAILED: Mock call count mismatch for {service_name}.{method_name} (Exp {expected_count}, Got {actual_count})."); 
                                 current_method_eval_details["details"].append("Call count mismatch.")
-                            else: # Counts match, now check args/kwargs if details provided
+                            else: 
                                 calls_match_detail = True
                                 for i, (expected_call_detail, actual_call_detail) in enumerate(zip(expected_call_list, actual_method_calls)):
                                     if not isinstance(expected_call_detail, dict): 
                                         calls_match_detail = False; eval_msgs.append(f"FAILED: Invalid expected call structure {i} for {service_name}.{method_name}."); 
                                         current_method_eval_details["details"].append(f"Invalid expected call structure {i}"); break
                                     expected_args = expected_call_detail.get('args', "ANY"); expected_kwargs = expected_call_detail.get('kwargs', "ANY");
-                                    actual_args_val = actual_call_detail.get('args', []); actual_kwargs_val = actual_call_detail.get('kwargs', {}); # Renamed actual_args, actual_kwargs
+                                    actual_args_val = actual_call_detail.get('args', []); actual_kwargs_val = actual_call_detail.get('kwargs', {}); 
                                     args_match = (expected_args == "ANY" or repr(expected_args) == repr(actual_args_val))
                                     kwargs_match = (expected_kwargs == "ANY" or repr(expected_kwargs) == repr(actual_kwargs_val))
                                     if not args_match or not kwargs_match: 
@@ -1091,19 +1101,18 @@ class Seed_Core:
                                     current_method_eval_details["match"] = True; eval_msgs.append(f"PASSED: Mock calls (args/kwargs) matched for {service_name}.{method_name}.")
                                 elif not calls_match_detail : passed = False
                             sandbox_result['evaluation_details'][service_name][method_name] = current_method_eval_details
-                        else: # Invalid type for expectation
+                        else: 
                             passed = False; eval_msgs.append(f"FAILED: Invalid expected_calls value for '{service_name}.{method_name}'. Must be list of dicts or int.");
                             sandbox_result['evaluation_details'][service_name][method_name] = {"error": "Invalid expectation type"}
 
-                # Check for unexpected calls
-                for service_name_actual, actual_methods in actual_calls_all.items(): # Renamed service_name to service_name_actual
-                     if service_name_actual not in expected_calls: # Unexpected service called
+                for service_name_actual, actual_methods in actual_calls_all.items(): 
+                     if service_name_actual not in expected_calls: 
                           if actual_methods: 
                               passed=False; eval_msgs.append(f"FAILED: Unexpected calls to service '{service_name_actual}'. Details: {actual_methods}");
                               if service_name_actual not in sandbox_result['evaluation_details']: sandbox_result['evaluation_details'][service_name_actual] = {}
                               sandbox_result['evaluation_details'][service_name_actual]["__UNEXPECTED_SERVICE_CALLS__"] = actual_methods
-                     elif isinstance(expected_calls.get(service_name_actual), dict): # Service was expected, check for unexpected methods
-                          for method_name_actual, calls in actual_methods.items(): # Renamed method_name to method_name_actual
+                     elif isinstance(expected_calls.get(service_name_actual), dict): 
+                          for method_name_actual, calls in actual_methods.items(): 
                               if method_name_actual not in expected_calls[service_name_actual]:
                                    if calls: 
                                        passed=False; eval_msgs.append(f"FAILED: Unexpected calls to method '{service_name_actual}.{method_name_actual}'. Details: {calls}");
@@ -1118,8 +1127,8 @@ class Seed_Core:
                 sandbox_result['success'] = False; sandbox_result['error'] = f"SandboxError: {eval_err}"; sandbox_result['message'] = "Test sandbox failed internally during setup or evaluation."; logger.error(f"Core Code Test Failed (Sandbox Setup/Eval): {eval_err}", exc_info=True)
             result_queue.put(sandbox_result)
         
-        result_queue_obj = queue.Queue(); # Renamed result_queue to result_queue_obj
-        test_thread = threading.Thread(target=_run_test_in_sandbox, args=(result_queue_obj,)) # Use renamed var
+        result_queue_obj = queue.Queue(); 
+        test_thread = threading.Thread(target=_run_test_in_sandbox, args=(result_queue_obj,)) 
         test_thread.daemon = True; test_thread.start()
         timeout_ms = test_scenario.get('max_test_duration_ms', CORE_CODE_TEST_DEFAULT_TIMEOUT_MS)
         timeout_sec = timeout_ms / 1000.0; test_thread.join(timeout=timeout_sec)
@@ -1127,12 +1136,12 @@ class Seed_Core:
         if test_thread.is_alive():
             result['success'] = False; result['message'] = f"Test failed: Timed out after {timeout_sec:.1f} seconds."; result['details']['timed_out'] = True; result['reason'] = 'timeout'; logger.warning(f"Core Code Test TIMED OUT for target '{target_name}'.")
         else:
-            try: sandbox_res = result_queue_obj.get_nowait(); # Renamed sandbox_result to sandbox_res, use renamed queue var
+            try: sandbox_res = result_queue_obj.get_nowait(); 
             except queue.Empty: sandbox_res = {"success": False, "message": "Test failed: Result queue empty after thread join.", "error":"QueueEmpty", "evaluation_details":{}}
             except Exception as q_err: sandbox_res = {"success": False, "message": f"Test failed: Error getting result from queue: {q_err}", "error":str(q_err), "evaluation_details":{}}
             result['success'] = sandbox_res.get('success', False);
             result['message'] = sandbox_res.get('message', 'Test completed, result format invalid.');
-            result['details'].update(sandbox_res); result['details']['timed_out'] = False # sandbox_res already contains evaluation_details
+            result['details'].update(sandbox_res); result['details']['timed_out'] = False 
             result['reason'] = 'test_passed' if result['success'] else 'test_failed'
         return result
 
