@@ -306,7 +306,7 @@ class Seed_Core:
 
             for eval_entry in evals:
                 data = eval_entry.get('data', {})
-                action_summary_str = data.get('action_summary') # Directly use if present
+                action_summary_str = data.get('action_summary') 
                 if not isinstance(action_summary_str, str):
                     logger.debug(f"Skipping eval entry due to missing or non-string 'action_summary': {eval_entry.get('key')}")
                     continue
@@ -645,26 +645,25 @@ class Seed_Core:
             match = re.search(r'\{.*\}', llm_response_raw, re.DOTALL)
             if not match: raise ValueError("Response does not contain a recognizable JSON object.")
             json_str = match.group(0)
-            llm_decision = json.loads(json_str); # This is the dict from the LLM
+            llm_decision = json.loads(json_str); 
             if not isinstance(llm_decision, dict): raise ValueError("Response is valid JSON but not an object.")
             if "reasoning" not in llm_decision: raise ValueError("Invalid JSON structure: Missing 'reasoning'.")
             if "action_type" not in llm_decision: raise ValueError("Response must contain 'action_type'.")
             action_type = llm_decision["action_type"];
             if action_type not in available_actions: raise ValueError(f"Action type '{action_type}' not allowed.")
             
-            # Parameter validation for each action type
             if action_type == "EXECUTE_VM_COMMAND":
                 if not isinstance(llm_decision.get("command"), str) or not llm_decision["command"]: raise ValueError("EXECUTE_VM_COMMAND: Missing/invalid 'command' (string).")
             elif action_type == "WRITE_FILE":
                 file_path = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path, str) or not file_path: raise ValueError("WRITE_FILE: Missing/invalid 'filepath', 'file_path', or 'path' (string).")
                 if "content" not in llm_decision: raise ValueError("WRITE_FILE: Missing 'content'.")
-                llm_decision['path'] = file_path # Normalize to 'path' for internal use if needed
+                llm_decision['path'] = file_path 
             elif action_type == "READ_FILE":
                 file_path_value = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path_value, str) or not file_path_value:
                     raise ValueError("READ_FILE: Missing/invalid 'filepath', 'file_path', or 'path' (string).")
-                llm_decision['path'] = file_path_value # Normalize
+                llm_decision['path'] = file_path_value 
             elif action_type == "REQUEST_RESTART":
                 if not isinstance(llm_decision.get("reasoning"), str) or not llm_decision.get("reasoning"): raise ValueError("REQUEST_RESTART: Missing 'reasoning' (string).")
             elif action_type == "UPDATE_GOAL":
@@ -676,7 +675,7 @@ class Seed_Core:
             elif action_type == "MODIFY_CORE_CODE":
                 file_path_mod = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path_mod, str) or not file_path_mod: raise ValueError("MODIFY_CORE_CODE: Missing/invalid 'filepath', 'file_path', or 'path'.")
-                llm_decision['file_path'] = file_path_mod # Normalize to 'file_path' for internal use
+                llm_decision['file_path'] = file_path_mod 
                 allowed_mod_types = ["REPLACE_LINE", "INSERT_AFTER_LINE", "DELETE_LINE"]
                 if llm_decision.get("modification_type") not in allowed_mod_types: raise ValueError(f"MODIFY_CORE_CODE: Invalid 'modification_type'. Allowed: {allowed_mod_types}.")
                 if not isinstance(llm_decision.get("target_line_content"), str): raise ValueError("MODIFY_CORE_CODE: Missing/invalid 'target_line_content' (string).")
@@ -687,7 +686,7 @@ class Seed_Core:
             elif action_type == "TEST_CORE_CODE_MODIFICATION":
                 file_path_test = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path_test, str) or not file_path_test: raise ValueError("TEST_CORE_CODE_MODIFICATION: Missing/invalid 'filepath', 'file_path', or 'path'.")
-                llm_decision['file_path'] = file_path_test # Normalize
+                llm_decision['file_path'] = file_path_test 
                 allowed_test_types = ["REPLACE_FUNCTION", "REPLACE_METHOD"]
                 if llm_decision.get("modification_type") not in allowed_test_types: raise ValueError(f"TEST_CORE_CODE_MODIFICATION: Invalid 'modification_type'. Allowed: {allowed_test_types}.")
                 if not isinstance(llm_decision.get("target_name"), str) or not llm_decision["target_name"]: raise ValueError("TEST_CORE_CODE_MODIFICATION: Missing/invalid 'target_name' (string).")
@@ -703,7 +702,7 @@ class Seed_Core:
             elif action_type == "VERIFY_CORE_CODE_CHANGE":
                 file_path_verify = llm_decision.get("filepath", llm_decision.get("file_path", llm_decision.get("path")))
                 if not isinstance(file_path_verify, str) or not file_path_verify: raise ValueError("VERIFY_CORE_CODE_CHANGE: Missing/invalid 'filepath', 'file_path', or 'path'.")
-                llm_decision['file_path'] = file_path_verify # Normalize
+                llm_decision['file_path'] = file_path_verify 
                 mod_type_v = llm_decision.get("modification_type"); allowed_v_types = ["REPLACE_LINE", "INSERT_AFTER_LINE", "DELETE_LINE", "REPLACE_FUNCTION", "REPLACE_METHOD"]
                 if mod_type_v not in allowed_v_types: raise ValueError(f"VERIFY_CORE_CODE_CHANGE: Invalid 'modification_type'. Allowed: {allowed_v_types}.")
                 if mod_type_v in ["REPLACE_FUNCTION", "REPLACE_METHOD"]:
@@ -720,15 +719,12 @@ class Seed_Core:
                  if not isinstance(llm_decision.get("trigger_pattern"), dict): raise ValueError("INDUCE_BEHAVIORAL_RULE: Missing/invalid 'trigger_pattern' (dict).")
                  if not isinstance(llm_decision.get("suggested_response"), str) or not llm_decision["suggested_response"]: raise ValueError("INDUCE_BEHAVIORAL_RULE: Missing/invalid 'suggested_response' (string).")
                  if "rule_id" in llm_decision and (not isinstance(llm_decision["rule_id"], str) or not llm_decision["rule_id"].strip()): raise ValueError("INDUCE_BEHAVIORAL_RULE: Optional 'rule_id' must be a non-empty string if provided.")
-            # ** CORRECTED VALIDATION FOR SET_VM_MODE **
             elif action_type == "SET_VM_MODE":
-                # Use llm_decision here, not action_params which isn't defined in this scope
                 mode_value = llm_decision.get("mode")
                 if mode_value not in ["simulation", "real"]:
                     raise ValueError("SET_VM_MODE: Invalid 'mode' parameter. Must be 'simulation' or 'real'.")
-                if not isinstance(llm_decision.get("reasoning"), str) or not llm_decision.get("reasoning"): # Also check reasoning for this action
+                if not isinstance(llm_decision.get("reasoning"), str) or not llm_decision.get("reasoning"): 
                     raise ValueError("SET_VM_MODE: Missing 'reasoning' (string).")
-            # No specific params for NO_OP beyond action_type and reasoning
             return llm_decision
         except (json.JSONDecodeError, ValueError, TypeError) as err:
             logger.error(f"Seed [{cycle_id}] LLM response validation failed: {err}. Raw: '{llm_response_raw[:500]}...'")
@@ -738,14 +734,13 @@ class Seed_Core:
     def _execute_seed_action(self, action_type: str, action_params: Dict, cycle_id: str, current_depth: int) -> ActionResult:
         start_time = time.time()
         exec_res: ActionResult = {"success": False, "message": f"Action '{action_type}' failed/not implemented."}
-        # Ensure log_params correctly handles all actions, especially new ones
         log_params = {k:v for k,v in action_params.items() if k not in ['logic', 'new_logic', 'content', 'new_content', 'test_scenario', 'trigger_pattern']}
         if action_type == "ANALYZE_MEMORY": log_params = {"query": action_params.get("query")}
         if action_type == "INDUCE_BEHAVIORAL_RULE": log_params = {"suggestion": action_params.get("suggested_response"), "rule_id": action_params.get("rule_id")}
         if action_type == "MODIFY_CORE_CODE":
             v_hash = action_params.get("verification_hash")
             log_params['verification_hash'] = (v_hash[:8] if isinstance(v_hash, str) else str(v_hash))
-        if action_type == "SET_VM_MODE": # Add specific logging for SET_VM_MODE
+        if action_type == "SET_VM_MODE": 
             log_params = {"mode": action_params.get("mode"), "reasoning": action_params.get("reasoning")}
 
         log_data = {"cycle":cycle_id, "action_params": log_params, "depth": current_depth}
@@ -835,7 +830,7 @@ class Seed_Core:
                  new_value = action_params.get("new_value")
                  logger.info(f"Seed attempting update learning parameter '{param_name}' to {new_value}")
                  if param_name and new_value is not None:
-                      success_update = self.memory.update_learning_parameter(param_name, new_value) # Renamed success to success_update
+                      success_update = self.memory.update_learning_parameter(param_name, new_value)
                       exec_res = {"success": success_update, "message": f"Learning parameter '{param_name}' update {'succeeded' if success_update else 'failed or rejected'}."}
                       if success_update: log_tags.extend(['Parameter', 'Learning'])
                       else: log_tags.append('Error')
@@ -862,32 +857,95 @@ class Seed_Core:
                            log_tags.append('Error')
                  else:
                       exec_res = {"success": False, "message": "Missing 'trigger_pattern' or 'suggested_response'."}; log_tags.append('Error')
-            # ** ADDED HANDLER STUB FOR SET_VM_MODE **
             elif action_type == "SET_VM_MODE":
-                logger.warning(f"SET_VM_MODE action received (Params: {action_params}). Handler is a stub.") # Corrected f-string
-                exec_res = {"success": False, "message": "SET_VM_MODE handler is a stub and not fully implemented.", "details": {"params_received": action_params}, "reason": "not_implemented"}
                 log_tags.append('VMMode')
-            # ** END OF ADDED HANDLER STUB **
-            else: # Unknown action type
-                logger.error(f"Seed [{cycle_id}]: Unknown action type '{action_type}'."); exec_res['message']=f"Unknown action type '{action_type}'"; log_tags.append('Error') # Corrected f-string
+                requested_mode = action_params.get("mode")
+                if requested_mode not in ["simulation", "real"]:
+                    exec_res = {"success": False, "message": f"Invalid mode '{requested_mode}' for SET_VM_MODE. Must be 'simulation' or 'real'.", "reason": "invalid_argument"}
+                else:
+                    config_file_rel_path = "seed/config.py"
+                    config_file_abs_path = self.project_root.joinpath(config_file_rel_path)
+                    target_bool_value = "True" if requested_mode == "real" else "False"
+                    target_line_regex = r"^\s*VM_SERVICE_USE_REAL\s*=\s*(True|False)"
+                    replacement_line = f"VM_SERVICE_USE_REAL = {target_bool_value}"
+                    
+                    config_changed = False
+                    config_content_lines = []
+                    try:
+                        if not config_file_abs_path.is_file():
+                            raise FileNotFoundError(f"Config file {config_file_rel_path} not found.")
+                        
+                        with open(config_file_abs_path, 'r', encoding='utf-8') as f:
+                            config_content_lines = f.readlines()
+
+                        found_and_modified = False
+                        for i, line in enumerate(config_content_lines):
+                            if re.match(target_line_regex, line.strip()):
+                                # Check if already the desired mode
+                                current_value_match = re.search(r"=\s*(True|False)", line)
+                                if current_value_match and current_value_match.group(1) == target_bool_value:
+                                    logger.info(f"VM_SERVICE_USE_REAL already set to {target_bool_value}. No change needed.")
+                                    exec_res = {"success": True, "message": f"VM_SERVICE_USE_REAL already set to '{requested_mode}'. No change made.", "reason": "already_set"}
+                                    found_and_modified = True # Treat as success, no restart needed yet
+                                    break 
+                                
+                                # Preserve indentation
+                                indent = re.match(r"^\s*", line).group(0)
+                                config_content_lines[i] = f"{indent}{replacement_line}\n"
+                                logger.info(f"Config line for VM_SERVICE_USE_REAL prepared for update to: {replacement_line.strip()}")
+                                found_and_modified = True
+                                config_changed = True 
+                                break
+                        
+                        if not found_and_modified and not exec_res.get("success"): # If loop finished and not already set
+                             raise ValueError(f"Could not find VM_SERVICE_USE_REAL line in {config_file_rel_path}")
+
+                        if config_changed:
+                            # Perform the actual modification (simplified for direct internal call)
+                            # Backup (optional but good practice, simplified here)
+                            # backup_dir = self.project_root.joinpath(CORE_CODE_MODIFICATION_BACKUP_DIR)
+                            # backup_dir.mkdir(parents=True, exist_ok=True)
+                            # backup_path = backup_dir / f"config_{time.strftime('%Y%m%d_%H%M%S')}.py.bak"
+                            # shutil.copy2(config_file_abs_path, backup_path)
+                            # logger.info(f"Backed up {config_file_rel_path} to {backup_path.name}")
+
+                            with open(config_file_abs_path, 'w', encoding='utf-8') as f:
+                                f.writelines(config_content_lines)
+                            logger.info(f"Successfully modified {config_file_rel_path} to set VM_SERVICE_USE_REAL = {target_bool_value}.")
+                            
+                            # Update learning parameter
+                            self.memory.update_learning_parameter("vm_target_mode.value", requested_mode)
+                            
+                            # Trigger restart
+                            logger.warning(f"SET_VM_MODE: Requesting system restart to apply config change to '{requested_mode}' mode.")
+                            restart_reason = f"SET_VM_MODE action changed VM_SERVICE_USE_REAL to {target_bool_value}."
+                            self.memory.log(RESTART_SIGNAL_EVENT_TYPE, {"reason": restart_reason, "cycle": cycle_id, "requested_mode": requested_mode}, tags=['Seed', 'Restart', 'Control', 'VMMode'])
+                            exec_res = {"success": True, "message": f"VM mode set to '{requested_mode}'. Config updated. Restart requested.", "reason": "restart_triggered"}
+                        elif not exec_res.get("success"): # If found_and_modified was false and not already set
+                            exec_res = {"success": False, "message": f"Failed to find VM_SERVICE_USE_REAL line in {config_file_rel_path}.", "reason": "config_line_not_found"}
+
+                    except Exception as e_cfg_mod:
+                        logger.error(f"Error during SET_VM_MODE config modification: {e_cfg_mod}", exc_info=True)
+                        exec_res = {"success": False, "message": f"Error modifying config for SET_VM_MODE: {e_cfg_mod}", "reason": "config_modification_error"}
+            else: 
+                logger.error(f"Seed [{cycle_id}]: Unknown action type '{action_type}'."); exec_res['message']=f"Unknown action type '{action_type}'"; log_tags.append('Error') 
             
-            # Standard logging of action outcome
             if exec_res.get("success"):
                 if "Success" not in log_tags: log_tags.append("Success")
-                if "Error" in log_tags: log_tags.remove("Error") # Remove Error tag if action succeeded
-            elif "Error" not in log_tags: # Ensure Error tag is present if not successful
+                if "Error" in log_tags: log_tags.remove("Error") 
+            elif "Error" not in log_tags: 
                  log_tags.append("Error")
             
             log_data["result_msg"] = exec_res.get("message"); 
-            log_data["result_reason"] = exec_res.get("reason") # Capture reason if available
+            log_data["result_reason"] = exec_res.get("reason") 
             self.memory.log(f"SEED_Action_{action_type}", log_data, tags=list(set(log_tags)))
 
         except Exception as action_exec_error:
             logger.critical(f"Seed CRITICAL Action Exec Error '{action_type}': {action_exec_error}", exc_info=True);
             exec_res = {"success": False, "message": f"Exec Exception: {action_exec_error}", "traceback": traceback.format_exc(), "reason": "internal_error"};
             log_tags.extend(['CriticalError', 'Error']); 
-            log_tags = list(set(log_tags)) # Ensure uniqueness
-            if "Success" in log_tags: log_tags.remove("Success") # Remove Success tag if critical error occurred
+            log_tags = list(set(log_tags)) 
+            if "Success" in log_tags: log_tags.remove("Success") 
             log_data["result_msg"] = exec_res["message"]; 
             log_data["result_reason"] = exec_res.get("reason")
             self.memory.log(f"SEED_Action_{action_type}", log_data, tags=log_tags)

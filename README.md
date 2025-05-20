@@ -1,16 +1,16 @@
-# RSIAI-Seed: Recursive Self-Improving AI Seed
+# RSIAI0-Seed: Recursive Self-Improving AI Seed
 
-This project implements RSIAI-Seed, an experimental Artificial Intelligence system designed to explore Recursive Self-Improvement (RSI). The core concept is a "Seed" AGI that, guided initially by an external Language Model (LLM) acting as a bootstrapper, aims to develop its own capabilities by analyzing its performance, modifying its own source code, testing those modifications, and verifying their safety and efficacy before applying them.
+This project implements RSIAI0-Seed, an experimental Artificial Intelligence system designed to explore Recursive Self-Improvement (RSI). The core concept is a "Seed" AGI that, guided initially by an external Language Model (LLM) acting as a bootstrapper, aims to develop its own capabilities by analyzing its performance, modifying its own source code, testing those modifications, and verifying their safety and efficacy before applying them.
 
 The ultimate goal is for the Seed to bootstrap its own intelligence, progressively enhancing its internal analysis, planning, learning, and reasoning functions to become more autonomous and capable over time.
 
 ---
 
-## ☢️ EXTREMELY IMPORTANT WARNINGS ☢️
+## ☢️ WARNINGS ☢️
 
 EXPECT BREAKING CHANGES
 
-This software is highly experimental research code exploring advanced AI concepts, including potentially Strong Recursive Self-Improvement (where the AI modifies its core learning and reasoning algorithms). It carries significant risks and should be handled with extreme caution.
+This software is highly experimental research code exploring advanced AI concepts, including potentially Strong Recursive Self-Improvement (where the AI modifies its core learning and reasoning algorithms). It carries significant risks and should be handled with extreme caution. 
 
 By cloning, running, or modifying this software, you acknowledge these risks and take full responsibility for any consequences arising from its use. Proceed with caution.
 
@@ -62,16 +62,6 @@ By cloning, running, or modifying this software, you acknowledge these risks and
         export OPENAI_API_KEY="your_api_key_here"
         ```
     -   If using a local LLM via a custom URL (like Ollama or vLLM), set `LLM_BASE_URL` in `config.py` or via environment variable `OPENAI_BASE_URL`. You might set `OPENAI_API_KEY` to a dummy value like `"nokey"` if the local server doesn't require one.
-3.  Environment Mode:
-    -   `VM_SERVICE_USE_REAL`: Set to `False` (default) for simulation mode or `True` to interact with Docker/Subprocess.
-    -   `VM_SERVICE_DOCKER_CONTAINER`: If `VM_SERVICE_USE_REAL=True`, specify your target Docker container name here if using Docker. Ensure the container exists and is running. If `None` or Docker is unavailable, it falls back to local subprocess execution (use with extreme caution).
-4.  RSI Features:
-    -   `ENABLE_CORE_CODE_MODIFICATION`: Set to `True` to allow `MODIFY_CORE_CODE`, `TEST_CORE...`, `VERIFY_CORE...` actions. Defaults to `True` - disable if you only want to observe non-modifying behavior.
-    -   `SEED_ENABLE_RUNTIME_CODE_EXECUTION`: Set to `True` (default) to allow the `TEST_CORE_CODE_MODIFICATION` action sandbox. Required for testing code snippets.
-    -   `CORE_CODE_MODIFICATION_ALLOWED_DIRS`: Configure which project directories the Seed is allowed to modify/test.
-    -   `CORE_CODE_VERIFICATION_SUITES`: Configure the commands used for different verification levels (e.g., `pytest` commands).
-5.  LLM Manual Mode:
-    -   `LLM_MANUAL_MODE`: Set to `True` if you want to manually provide the JSON action decisions when prompted in the console, instead of using the LLM API. Useful for debugging or running without API access.
 
 ## Running the System
 
