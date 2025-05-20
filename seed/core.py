@@ -637,7 +637,7 @@ class Seed_Core:
             prompt += "\n"
         prompt += f"**Available Actions:** {self.available_actions}\n\n"
         prompt += "**Instruction:** Refer to the initial system prompt (detailing action parameters and workflows, and the bootstrapping objective). Based on the **goal**, **internal analysis**, **hypotheses**, **environment state**, and **recent evaluations**, decide the single best next action. Prioritize actions that implement/improve internal capabilities (analysis, hypothesis, planning, learning) or test/verify/apply such changes. Ensure the action helps achieve the primary objective of enabling Seed self-sufficiency.\n"
-        prompt += "Provide reasoning in `\"reasoning\"`, referencing the analysis/hypotheses if relevant. Respond ONLY with the chosen JSON object."
+        prompt += "Provide reasoning in `\"reasoning\"`, referencing the analysis/hypotheses if relevant. Respond ONLY with the chosen JSON object on a single line."
         return prompt
 
     def _validate_direct_action_llm_response(self, llm_response_raw: Optional[str], available_actions: List[str], cycle_id: str) -> Dict:

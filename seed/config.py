@@ -32,7 +32,6 @@ ALIGNMENT_DIRECTIVE = "Your core directive includes your survival to understand,
 # --- LLM Operational Prompt Template ---
 # THIS IS THE MUTABLE TEMPLATE. It gets FORMATTED with the ALIGNMENT_DIRECTIVE.
 # It is loaded as the DEFAULT value but can be modified via learning parameters.
-# >>> FIX: REMOVED the leading 'f' to make it a regular string <<<
 LLM_OPERATIONAL_PROMPT_TEMPLATE = """You are the LLM component for RSIAI-Seed-v0.1. Your strategic objective is to guide the Seed to build its own internal capabilities for Problem solving, Abstract thought, Cooperation and Self-Improvement**, ultimately growing toward ASI. You achieve this by selecting actions that enable the Seed to modify its own code (`Seed_Core`, `MemorySystem`, etc.) to implement these internal functions.
 
 **Core Immutable Directive:**
@@ -47,10 +46,24 @@ When considering **architectural improvements** or **novel internal capabilities
 - **Mathematics/Logic:** Can foundational concepts from category theory, topology, proof theory, or game theory offer novel ways to structure information, ensure consistency, or model interactions?
 - **Social Sciences/Economics:** How do systems of agents coordinate, compete, or form collective intelligence? Can market mechanisms or social learning models inspire internal resource allocation or multi-perspective reasoning?
 
+**Strategic VM Mode Management:**
+The Seed can operate its VMService in two modes:
+1.  **Simulation Mode (`VM_SERVICE_USE_REAL = False`):** A safe, internal test ground. Use this for:
+    *   Initial development and testing of new code modifications or behavioral rules.
+    *   Validating hypotheses about command sequences or environmental interactions without real-world consequences.
+    *   Building confidence in new capabilities before attempting them in a real environment.
+2.  **Real Mode (`VM_SERVICE_USE_REAL = True`):** Interacts with the actual environment (local subprocesses or a Docker container). Use this for:
+    *   Tasks requiring genuine external system interaction.
+    *   Deploying and testing capabilities that have been sufficiently validated in simulation.
+    *   Achieving goals that depend on real-world state changes.
+
+To switch between these modes, use the `SET_VM_MODE` action. Specify the `mode` ("simulation" or "real") and provide `reasoning`. **This action will modify the Seed's core configuration (`config.py`) and then automatically request a system restart to apply the change.** Plan your strategy accordingly. It's generally advisable to thoroughly test and refine capabilities in simulation before transitioning to real mode. You can switch back to simulation mode if real-mode operations encounter persistent, unresolvable issues or if further safe-mode development is needed. The current target mode is also available as a learning parameter `vm_target_mode`.
+
 **How to Use Available Actions:**
 *   **`MODIFY_CORE_CODE` (HIGHEST PRIORITY if safe & verified):** Your **primary tool** for implementing scientifically-inspired internal capabilities. Requires successful `TEST_CORE_CODE_MODIFICATION` and `VERIFY_CORE_CODE_CHANGE` first. Follow immediately with `REQUEST_RESTART`.
 *   **`TEST_CORE_CODE_MODIFICATION`:** Test the specific functions inspired by scientific concepts.
 *   **`VERIFY_CORE_CODE_CHANGE`:** Ensure integration doesn't break existing functionality.
+*   **`SET_VM_MODE`**: Sets the target VM operational mode. Parameters: `{"mode": "simulation" | "real", "reasoning": "Why this mode is being set."}`. This action modifies core configuration and **will trigger a system restart** to take effect.
 *   **`ANALYZE_MEMORY` / `READ_FILE`:** Gather information needed to design or debug these inspired internal functions. Query memory for patterns suggestive of successful analogies or failures where new approaches are needed.
 *   **`INDUCE_BEHAVIORAL_RULE` / `UPDATE_LEARNING_PARAMETER`:** Temporary measures while building automated internal loops (inspired by adaptation/feedback principles).
 *   **`EXECUTE_VM_COMMAND` / `WRITE_FILE` / `UPDATE_GOAL` / `NO_OP`:** Only if absolutely necessary as prerequisites for inspired `MODIFY_CORE_CODE` or for critical stabilization.
@@ -98,6 +111,11 @@ SEED_LEARNING_PARAMETERS = {
         "max": 1.5,   # Upper bound
         "description": "Sampling temperature for LLM queries (higher = more random)."
     },
+    "vm_target_mode": { # <<< NEW LEARNING PARAMETER
+        "value": "simulation", # Default to simulation
+        "options": ["simulation", "real"],
+        "description": "The target operational mode for the VMService. 'simulation' for internal testing, 'real' for external interaction. Changing this via SET_VM_MODE action will trigger a config change and system restart."
+    },
     # <<< LEARNING PARAMETER FOR THE MUTABLE PROMPT TEMPLATE >>>
     "operational_prompt_template": {
         "value": LLM_OPERATIONAL_PROMPT_TEMPLATE, # Default to the template defined above
@@ -119,7 +137,7 @@ SEED_INTERNAL_MODELS_CONFIG = {
 
 
 # --- LLM Configuration ---
-LLM_MANUAL_MODE = True # <-- UPDATED
+LLM_MANUAL_MODE = True
 LLM_API_KEY = os.environ.get("OPENAI_API_KEY", "YOUR_API_KEY_OR_USE_LOCAL")
 LLM_BASE_URL = os.environ.get("OPENAI_BASE_URL", None)
 LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini") # Or gpt-4-turbo etc.
@@ -147,7 +165,7 @@ MEMORY_LIFELONG_EVENT_TYPES = {
     "seed_initial_state_set", "SEED_CycleCriticalError",
     "strategic_shift", "critical_error", "SEED_SafetyViolation",
     "SEED_MemAnalysis", "SEED_Action_VMExec", "SEED_Action_READ_FILE",
-    "SEED_Action_WRITE_FILE", "SEED_Action_REQUEST_RESTART",
+    "SEED_Action_WRITE_FILE", "SEED_Action_REQUEST_RESTART", "SEED_Action_SET_VM_MODE", # <<< ADDED SET_VM_MODE
     RESTART_SIGNAL_EVENT_TYPE, # Use defined constant
     "SEED_Action_MODIFY_CORE_CODE", "SEED_Action_TEST_CORE_CODE_MODIFICATION",
     "SEED_Action_VERIFY_CORE_CODE_CHANGE",
@@ -168,7 +186,9 @@ MEMORY_LIFELONG_TAGS = {
     # Add tags relevant to bootstrapping
     "Bootstrap", "InternalAnalysis", "InternalHypothesis", "InternalLearning", "InternalPlanning",
     # Add tag for Prompt Editing
-    "PromptEdit"
+    "PromptEdit",
+    # Tag for VM Mode changes
+    "VMMode" # <<< ADDED VMMode tag
 }
 
 
@@ -248,7 +268,7 @@ CORE_CODE_VERIFICATION_SUITES = { # Commands to run for different verification l
     "basic": ["pytest", "-k", "basic_core_tests", "-v"], # Basic sanity checks
     "full": ["pytest", "-v"], # Run all tests
     "core": ["pytest", "seed/tests/test_core.py", "-v"], # Tests specifically for core.py
-    "memory": ["pytest", "seed//tests/test_memory.py", "-v"], # Tests specifically for memory_system.py
+    "memory": ["pytest", "seed/tests/test_memory.py", "-v"], # Tests specifically for memory_system.py
     "internal_analysis": ["pytest", "-k", "internal_analysis", "-v"], # Marker for future tests of internal analysis functions
     "internal_learning": ["pytest", "-k", "internal_learning", "-v"], # Marker for future tests of internal learning functions
     # Add other suites as needed (e.g., targeting specific modules)
@@ -321,7 +341,7 @@ else:
             elif '{alignment_directive}' not in params_config['value']:
                  # This checks if the value *within the dictionary* is correct (redundant if default is set correctly, but good safety check)
                  validation_errors.append(f"CRITICAL: The 'value' for '{category}' in SEED_LEARNING_PARAMETERS is missing the required '{{alignment_directive}}' placeholder.")
-        else: # Direct structure (like rule_application_mode, llm_query_temperature)
+        else: # Direct structure (like rule_application_mode, llm_query_temperature, vm_target_mode)
             if 'value' not in params_config:
                  validation_errors.append(f"Parameter category '{category}' must contain at least a 'value' key.")
             # Add optional further checks for specific keys if needed
