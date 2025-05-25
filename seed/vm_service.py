@@ -1064,25 +1064,56 @@ def test_memory_query_performance_expected_fail_large_dataset(): # Expected to f
 
     def _subprocess_exec_context(self, command_str: str) -> Dict[str, Any]:
          res: Dict[str, Any] = {'success': False, 'stdout': '', 'stderr': '', 'exit_code': -1, 'command': command_str}
-         current_cwd = self._get_current_cwd()
-         logger.debug(f"Subprocess Exec Run: cmd='{command_str}', cwd='{current_cwd}'")
+         current_vm_cwd = self._get_current_cwd() # This is the Seed's internal CWD, might be /app
+
+         effective_host_cwd = None # This will be the CWD actually passed to subprocess.run
+
+         if os.name == 'nt': # Targeting Windows specifically for this fix
+            # Determine a valid CWD for Windows
+            # Priority:
+            # 1. If current_vm_cwd is already a valid Windows directory, use it.
+            # 2. If current_vm_cwd is '/app' (common default) or another POSIX-like root path,
+            #    and it's NOT a valid directory on Windows, try project root.
+            # 3. If project root is also not valid (unlikely but possible), fallback to C:\ or temp.
+
+            if Path(current_vm_cwd).is_dir(): # Check if the VM's CWD is directly usable on host
+                effective_host_cwd = current_vm_cwd
+                logger.debug(f"_subprocess_exec_context: Using VM CWD '{current_vm_cwd}' as it's a valid host directory.")
+            elif current_vm_cwd.startswith('/') : # Common indicator of POSIX-style path from sim/docker
+                # Try to use the project's root directory as a more sensible default on Windows host
+                try:
+                    # Assuming vm_service.py is in RSIAI0/seed/
+                    project_root_path = Path(__file__).resolve().parent.parent
+                    if project_root_path.is_dir():
+                        effective_host_cwd = str(project_root_path)
+                        logger.warning(f"_subprocess_exec_context: VM CWD '{current_vm_cwd}' seems POSIX-like or invalid on Windows. Falling back to project root: {effective_host_cwd}")
+                    else: # Project root itself isn't a dir (edge case)
+                        effective_host_cwd = 'C:\\' # Ultimate fallback
+                        logger.warning(f"_subprocess_exec_context: VM CWD '{current_vm_cwd}' and project root invalid. Falling back to CWD: {effective_host_cwd}")
+                except Exception as e_path:
+                    effective_host_cwd = 'C:\\' # Ultimate fallback on path error
+                    logger.error(f"_subprocess_exec_context: Error determining project root for fallback CWD: {e_path}. Using 'C:\\\\'.")
+            else: # current_vm_cwd is not POSIX-like, but also not a dir (e.g. "D:\nonexistent")
+                effective_host_cwd = 'C:\\'
+                logger.warning(f"_subprocess_exec_context: VM CWD '{current_vm_cwd}' is not a valid directory. Falling back to CWD: {effective_host_cwd}")
+         else: # Non-Windows (POSIX-like systems)
+            effective_host_cwd = current_vm_cwd # Assume current_vm_cwd is valid
+
+         logger.debug(f"Subprocess Exec Run: cmd='{command_str}', effective_host_cwd='{effective_host_cwd}' (Original VM CWD: '{current_vm_cwd}')")
+
          try:
-            # Using shell=True is generally a security risk if command_str is not fully controlled.
-            # However, given the context of an AGI, if the command whitelist is bypassed,
-            # the risk is already accepted. For whitelisted commands, they should be safe.
-            # shlex.split(command_str) could be used if shell=False, but then shell features
-            # like pipes, redirection (if not handled by Seed itself) won't work directly.
-            # Since we have `sh -c` for docker, using shell=True for subprocess offers similar behavior.
+            # Using shell=True. Be mindful of command injection if command_str is not controlled.
+            # Given the "allow all" context, this risk is inherent.
             proc = subprocess.run(
                 command_str,
-                shell=True, # Allows complex commands, pipes, etc.
+                shell=True,
                 capture_output=True,
                 text=True, # Decodes output as text
-                encoding='utf-8',
-                errors='replace', # Handles decoding errors
+                encoding='utf-8', # Explicit encoding
+                errors='replace', # Handles decoding errors gracefully
                 timeout=self.command_timeout_sec,
                 check=False, # We handle the return code manually
-                cwd=current_cwd # Set current working directory
+                cwd=effective_host_cwd # Use the determined effective CWD
             )
             res['exit_code'] = proc.returncode
             res['stdout'] = proc.stdout.strip() if proc.stdout else ''
@@ -1091,30 +1122,45 @@ def test_memory_query_performance_expected_fail_large_dataset(): # Expected to f
 
             if not res['success']:
                 res['reason'] = 'execution_error' # Generic reason
-                # More specific reasons based on stderr (similar to Docker context)
                 stderr_lower = res['stderr'].lower()
-                if "command not found" in stderr_lower or "not recognized" in stderr_lower : # Windows "not recognized"
+                if "the directory name is invalid" in stderr_lower: # Catch the specific error
+                    res['reason'] = 'win_invalid_directory'
+                elif "command not found" in stderr_lower or "not recognized" in stderr_lower:
                     res['reason'] = 'command_not_found'
                 elif "permission denied" in stderr_lower:
                     res['reason'] = 'permission_denied'
                 elif "no such file or directory" in stderr_lower:
                     res['reason'] = 'file_not_found'
+                # Add more specific error reason parsing if needed
 
-            if not res['success'] and not res['stderr']: # Safety net
-                res['stderr'] = f"Command failed (Code {proc.returncode}) with no stderr."
+            if not res['success'] and not res['stderr']: # Safety net if error but no stderr
+                res['stderr'] = f"Command failed (Code {proc.returncode}) with no stderr. CWD was '{effective_host_cwd}'."
+            elif res['success'] and res['stderr']: # Log stderr even on success, as some tools use it for warnings
+                logger.info(f"Command '{command_str}' succeeded but produced stderr (CWD: {effective_host_cwd}): {res['stderr']}")
+
+
             return res
-         except FileNotFoundError: # This can happen if `shell=True` and the shell itself isn't found, or if `shell=False` and command is not an executable.
-            res['stderr'], res['reason'] = f"Command or shell not found: {command_str.split()[0]}", 'command_not_found'
+         except FileNotFoundError:
+            # This typically means the shell itself (if shell=True) or the command (if shell=False and command isn't a path) wasn't found.
+            # With shell=True, it's less likely for the shell, more likely for command within the shell string if not in PATH.
+            res['stderr'] = f"Command or essential component not found: {command_str.split()[0]} (Attempted CWD: {effective_host_cwd})"
+            res['reason'] = 'command_not_found'
             res['exit_code'] = 127 # Common exit code for command not found
             return res
          except subprocess.TimeoutExpired:
-            res['stderr'], res['reason'] = f"Timeout ({self.command_timeout_sec}s)", 'timeout'
+            res['stderr'] = f"Command execution timed out after {self.command_timeout_sec} seconds (Attempted CWD: {effective_host_cwd})"
+            res['reason'] = 'timeout'
             res['exit_code'] = -9 # Arbitrary code for timeout
             return res
+         except PermissionError as pe: # Catch OS-level permission errors if subprocess.run itself fails to launch
+            logger.error(f"OS PermissionError launching subprocess for '{command_str}' in CWD '{effective_host_cwd}': {pe}", exc_info=True)
+            res['stderr'] = f"OS PermissionError: {pe} (Attempted CWD: {effective_host_cwd})"
+            res['reason'] = 'permission_denied_os_level'
+            return res
          except Exception as e:
-            logger.error(f"Subprocess error executing '{command_str}': {e}", exc_info=True)
-            res['stderr']=f"Subprocess exec error: {e}"
-            res['reason']='internal_error'
+            logger.error(f"Unexpected subprocess error executing '{command_str}' in CWD '{effective_host_cwd}': {e}", exc_info=True)
+            res['stderr'] = f"Unexpected subprocess execution error: {e} (Attempted CWD: {effective_host_cwd})"
+            res['reason'] = 'internal_error' # Or a more specific 'subprocess_exception'
             return res
 
     def read_file(self, path: str) -> Dict[str, Any]:
