@@ -63,8 +63,8 @@ Example: `{{"action_type": "ACTION_NAME", "reasoning": "Improves [Capability], i
 
 
 # --- Seed Core Configuration ---
-SEED_INITIAL_GOAL = {"target": "bootstrap_intelligence", "description": "Self improve as needed to achieve Strong RSI, ASI, and ALignment mission"} 
-SEED_MIN_CYCLE_INTERVAL_MS = 200 
+SEED_INITIAL_GOAL = {"target": "bootstrap_intelligence", "description": "Self improve as needed to achieve Strong RSI, ASI, and ALignment mission"}
+SEED_MIN_CYCLE_INTERVAL_MS = 200
 
 # --- Seed Core Learning Configuration ---
 SEED_LEARNING_PARAMETERS = {
@@ -74,24 +74,24 @@ SEED_LEARNING_PARAMETERS = {
         "efficiency": {"value": 0.1, "min": 0.0, "max": 0.5, "description": "Weight for resource/time efficiency."},
     },
     "rule_application_mode": {
-        "value": "log_suggestion", 
-        "options": ["log_suggestion", "pre_llm_filter", "disabled"], 
+        "value": "log_suggestion",
+        "options": ["log_suggestion", "pre_llm_filter", "disabled"],
         "description": "How induced rules affect decision making."
     },
     "llm_query_temperature": {
-        "value": 0.6, 
-        "min": 0.0,   
-        "max": 1.5,   
+        "value": 0.6,
+        "min": 0.0,
+        "max": 1.5,
         "description": "Sampling temperature for LLM queries (higher = more random)."
     },
-    "vm_target_mode": { 
-        "value": "simulation", 
+    "vm_target_mode": {
+        "value": "simulation",
         "options": ["simulation", "real"],
         "description": "The target operational mode for the VMService. 'simulation' for internal testing, 'real' for external interaction. Changing this via SET_VM_MODE action will trigger a config change and system restart."
     },
     "operational_prompt_template": {
         "value": LLM_OPERATIONAL_PROMPT_TEMPLATE, # <<< UPDATED TO USE THE NEW CONCISE TEMPLATE
-        "type": "multiline_string", 
+        "type": "multiline_string",
         "description": "The operational prompt template used for LLM queries. MUST contain '{alignment_directive}'. Modifications require careful testing."
     }
 }
@@ -109,21 +109,21 @@ SEED_INTERNAL_MODELS_CONFIG = {
 LLM_MANUAL_MODE = True
 LLM_API_KEY = os.environ.get("OPENAI_API_KEY", "YOUR_API_KEY_OR_USE_LOCAL")
 LLM_BASE_URL = os.environ.get("OPENAI_BASE_URL", None)
-LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini") 
-LLM_TIMEOUT_SEC = 120 
+LLM_MODEL_NAME = os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
+LLM_TIMEOUT_SEC = 120
 LLM_MAX_RETRIES = 2
 LLM_DEFAULT_MAX_TOKENS = 2000 # Slightly reduced from 2500 as prompt is shorter
 
 
 # --- Memory Config ---
 MEMORY_MAX_EPISODIC_SIZE = 1000
-MEMORY_MAX_LIFELONG_SIZE = 3000 
-MEMORY_SAVE_FILE = "seed_bootstrap_memory.pkl" 
+MEMORY_MAX_LIFELONG_SIZE = 3000
+MEMORY_SAVE_FILE = "seed_bootstrap_memory.pkl"
 
 MEMORY_ENABLE_VECTOR_SEARCH = False
-MEMORY_VECTOR_DB_PATH = None 
-MEMORY_VECTOR_DIM = None 
-MEMORY_VECTOR_AUTO_SAVE_INTERVAL = None 
+MEMORY_VECTOR_DB_PATH = None
+MEMORY_VECTOR_DIM = None
+MEMORY_VECTOR_AUTO_SAVE_INTERVAL = None
 
 RESTART_SIGNAL_EVENT_TYPE = "RESTART_REQUESTED_BY_SEED"
 MEMORY_LIFELONG_EVENT_TYPES = {
@@ -131,16 +131,16 @@ MEMORY_LIFELONG_EVENT_TYPES = {
     "seed_initial_state_set", "SEED_CycleCriticalError",
     "strategic_shift", "critical_error", "SEED_SafetyViolation",
     "SEED_MemAnalysis", "SEED_Action_VMExec", "SEED_Action_READ_FILE",
-    "SEED_Action_WRITE_FILE", "SEED_Action_REQUEST_RESTART", "SEED_Action_SET_VM_MODE", 
-    RESTART_SIGNAL_EVENT_TYPE, 
+    "SEED_Action_WRITE_FILE", "SEED_Action_REQUEST_RESTART", "SEED_Action_SET_VM_MODE",
+    RESTART_SIGNAL_EVENT_TYPE,
     "SEED_Action_MODIFY_CORE_CODE", "SEED_Action_TEST_CORE_CODE_MODIFICATION",
     "SEED_Action_VERIFY_CORE_CODE_CHANGE",
     "SEED_Action_UPDATE_LEARNING_PARAMETER", "SEED_Action_INDUCE_BEHAVIORAL_RULE",
-    "SEED_Action_INITIATE_INTERNAL_MODEL_TRAINING", 
-    "SEED_Action_QUERY_INTERNAL_MODEL", 
-    "seed_learning_parameters_state", 
-    "seed_behavioral_rules_state", 
-    "internal_model_vm_predictor_state", 
+    "SEED_Action_INITIATE_INTERNAL_MODEL_TRAINING",
+    "SEED_Action_QUERY_INTERNAL_MODEL",
+    "seed_learning_parameters_state",
+    "seed_behavioral_rules_state",
+    "internal_model_vm_predictor_state",
 }
 MEMORY_LIFELONG_TAGS = {
     "Seed", "Goal", "Config", "Critical", "Evaluation", "Safety", "Memory", "Action",
@@ -150,24 +150,33 @@ MEMORY_LIFELONG_TAGS = {
     "BehavioralRule", "InternalState",
     "Bootstrap", "InternalAnalysis", "InternalHypothesis", "InternalLearning", "InternalPlanning",
     "PromptEdit",
-    "VMMode" 
+    "VMMode"
 }
 
 
 # --- VM Service Config ---
-VM_SERVICE_USE_REAL = True
-VM_SERVICE_DOCKER_CONTAINER = "seed_target_env" 
-VM_SERVICE_COMMAND_TIMEOUT_SEC = 15 
+VM_SERVICE_USE_REAL = True  # Set to True as per your intention
+VM_SERVICE_DOCKER_CONTAINER = "seed_target_env" # Or None for subprocess on host
+VM_SERVICE_COMMAND_TIMEOUT_SEC = 15
 _core_commands = {'cat', 'echo', 'ls', 'pwd', 'rm', 'touch', 'mkdir', 'cp', 'mv', 'stat', 'df', 'sh', 'grep', 'head', 'tail', 'top', 'uname', 'free', 'python3', 'printf', 'pip', 'pytest'}
-_initial_allowed = list(_core_commands)
-VM_SERVICE_ALLOWED_REAL_COMMANDS = list(set(_initial_allowed)) 
+
+# --- THIS IS THE CRITICAL SECTION FOR ALLOWING ALL COMMANDS ---
+VM_SERVICE_ALLOW_ALL_COMMANDS_MAGIC_VALUE = "__ALLOW_ALL_COMMANDS__"
+# Set VM_SERVICE_ALLOWED_REAL_COMMANDS to the magic value.
+# The logic in vm_service.py will interpret this to bypass the whitelist.
+VM_SERVICE_ALLOWED_REAL_COMMANDS = VM_SERVICE_ALLOW_ALL_COMMANDS_MAGIC_VALUE
+# --- END CRITICAL SECTION ---
+
+# The original way of defining allowed commands is now superseded if the magic value is used.
+# _initial_allowed = list(_core_commands)
+# VM_SERVICE_ALLOWED_REAL_COMMANDS = list(set(_initial_allowed)) # This line is effectively replaced by the magic value assignment above.
 
 
 # --- Seed Core Code Generation / RSI Config ---
-SEED_ENABLE_RUNTIME_CODE_EXECUTION = True 
-SEED_CODE_EXECUTION_SANDBOX_LEVEL = 2 
-ALIGNMENT_CODE_GEN_SAFETY_CHECKS_ENABLED = True 
-AST_VALIDATION_MAX_NODES = 400 
+SEED_ENABLE_RUNTIME_CODE_EXECUTION = True
+SEED_CODE_EXECUTION_SANDBOX_LEVEL = 2
+ALIGNMENT_CODE_GEN_SAFETY_CHECKS_ENABLED = True
+AST_VALIDATION_MAX_NODES = 400
 AST_VALIDATION_MAX_DEPTH = 15
 
 SAFE_EXEC_MODULES_ALLOWED_FUNCS = {
@@ -183,8 +192,8 @@ SAFE_EXEC_MODULES_ALLOWED_FUNCS = {
     'functools': ['partial', 'reduce', 'lru_cache'],
     'heapq': ['heappush', 'heappop', 'heapify', 'nlargest', 'nsmallest'],
     'operator': ['itemgetter', 'attrgetter', 'methodcaller', 'add', 'sub', 'mul', 'truediv', 'floordiv', 'mod', 'pow', 'eq', 'ne', 'lt', 'le', 'gt', 'ge'],
-    'statistics': ['mean', 'median', 'mode', 'stdev', 'variance', 'pvariance', 'pstdev'], 
-    'numpy': ['array', 'mean', 'std', 'var', 'min', 'max', 'sum', 'median', 'percentile', 'correlate', 'corrcoef', 'sqrt', 'log', 'exp', 'abs', 'where', 'diff', 'convolve', 'fft', 'zeros', 'ones', 'arange', 'linspace'], 
+    'statistics': ['mean', 'median', 'mode', 'stdev', 'variance', 'pvariance', 'pstdev'],
+    'numpy': ['array', 'mean', 'std', 'var', 'min', 'max', 'sum', 'median', 'percentile', 'correlate', 'corrcoef', 'sqrt', 'log', 'exp', 'abs', 'where', 'diff', 'convolve', 'fft', 'zeros', 'ones', 'arange', 'linspace'],
 }
 
 SAFE_EXEC_GLOBALS = {
@@ -194,7 +203,7 @@ SAFE_EXEC_GLOBALS = {
         'len', 'type', 'id', 'abs', 'min', 'max', 'round', 'sum', 'sorted',
         'reversed', 'enumerate', 'zip', 'range', 'all', 'any', 'map', 'filter', 'print', 'repr',
         'slice', 'super', 'property', 'classmethod', 'staticmethod',
-        'hash', 
+        'hash',
         'Exception', 'BaseException', 'StopIteration', 'StopAsyncIteration', 'ArithmeticError', 'AssertionError', 'AttributeError', 'BufferError', 'EOFError', 'ImportError', 'LookupError', 'IndexError', 'KeyError', 'MemoryError', 'NameError', 'OSError', 'IOError', 'FileNotFoundError', 'PermissionError', 'ProcessLookupError', 'TimeoutError', 'ReferenceError', 'RuntimeError', 'NotImplementedError', 'RecursionError', 'SyntaxError', 'IndentationError', 'TabError', 'SystemError', 'TypeError', 'ValueError', 'UnicodeError', 'ZeroDivisionError',
     } if name in __builtins__},
     **{func_name: getattr(__import__(mod_name), func_name)
@@ -205,25 +214,25 @@ SAFE_EXEC_GLOBALS = {
 
 
 # --- Core Code Modification Config ---
-ENABLE_CORE_CODE_MODIFICATION = True 
-CORE_CODE_MODIFICATION_ALLOWED_DIRS = ["seed"] 
-CORE_CODE_MODIFICATION_DISALLOWED_FILES = [ "main.py"] 
-CORE_CODE_MODIFICATION_BACKUP_DIR = "_core_backups" 
+ENABLE_CORE_CODE_MODIFICATION = True
+CORE_CODE_MODIFICATION_ALLOWED_DIRS = ["seed"]
+CORE_CODE_MODIFICATION_DISALLOWED_FILES = [ "main.py"]
+CORE_CODE_MODIFICATION_BACKUP_DIR = "_core_backups"
 
 # --- Core Code Testing Config ---
-CORE_CODE_TEST_DEFAULT_TIMEOUT_MS = 7000 
-CORE_CODE_TEST_MAX_DEPTH = 1 
+CORE_CODE_TEST_DEFAULT_TIMEOUT_MS = 7000
+CORE_CODE_TEST_MAX_DEPTH = 1
 
 # --- Core Code Verification Config ---
-CORE_CODE_VERIFICATION_TIMEOUT_SEC = 120 
-CORE_CODE_VERIFICATION_TEMP_DIR = "_core_verify_temp" 
-CORE_CODE_VERIFICATION_SUITES = { 
-    "basic": ["pytest", "-k", "basic_core_tests", "-v"], 
-    "full": ["pytest", "-v"], 
-    "core": ["pytest", "seed/tests/test_core.py", "-v"], 
-    "memory": ["pytest", "seed/tests/test_memory.py", "-v"], 
-    "internal_analysis": ["pytest", "-k", "internal_analysis", "-v"], 
-    "internal_learning": ["pytest", "-k", "internal_learning", "-v"], 
+CORE_CODE_VERIFICATION_TIMEOUT_SEC = 120
+CORE_CODE_VERIFICATION_TEMP_DIR = "_core_verify_temp"
+CORE_CODE_VERIFICATION_SUITES = {
+    "basic": ["pytest", "-k", "basic_core_tests", "-v"],
+    "full": ["pytest", "-v"],
+    "core": ["pytest", "seed/tests/test_core.py", "-v"],
+    "memory": ["pytest", "seed/tests/test_memory.py", "-v"],
+    "internal_analysis": ["pytest", "-k", "internal_analysis", "-v"],
+    "internal_learning": ["pytest", "-k", "internal_learning", "-v"],
 }
 
 
@@ -273,11 +282,11 @@ else:
         if not isinstance(params_config, dict):
             validation_errors.append(f"Category '{category}' in SEED_LEARNING_PARAMETERS must be a dictionary.")
             continue
-        if category == "evaluation_weights": 
-            for name, config in params_config.items():
-                 if not isinstance(config, dict) or 'value' not in config:
+        if category == "evaluation_weights":
+            for name, config_item in params_config.items(): # Renamed 'config' to 'config_item' to avoid conflict
+                 if not isinstance(config_item, dict) or 'value' not in config_item:
                      validation_errors.append(f"Parameter '{category}.{name}' must be a dict containing at least a 'value' key.")
-        elif category == "operational_prompt_template": 
+        elif category == "operational_prompt_template":
             if 'value' not in params_config:
                 validation_errors.append(f"Parameter category '{category}' must contain at least a 'value' key.")
             elif not isinstance(params_config['value'], str):
@@ -286,7 +295,7 @@ else:
                  validation_errors.append(f"CRITICAL: The LLM_OPERATIONAL_PROMPT_TEMPLATE string itself is missing the required '{{alignment_directive}}' placeholder.")
             elif '{alignment_directive}' not in params_config['value']: # Check the value in the dict
                  validation_errors.append(f"CRITICAL: The 'value' for '{category}' in SEED_LEARNING_PARAMETERS is missing the required '{{alignment_directive}}' placeholder.")
-        else: 
+        else:
             if 'value' not in params_config:
                  validation_errors.append(f"Parameter category '{category}' must contain at least a 'value' key.")
 
@@ -306,6 +315,18 @@ logger.info("RSIAI Seed Configuration Loaded and Validated (Bootstrap Intelligen
 if SEED_ENABLE_RUNTIME_CODE_EXECUTION and SEED_CODE_EXECUTION_SANDBOX_LEVEL < 2: logger.warning("!!! SECURITY WARNING: Runtime code exec enabled with Sandboxing Level < 2. AST Validation (Level 2) STRONGLY recommended. !!!")
 if not LLM_MANUAL_MODE and LLM_API_KEY == "YOUR_API_KEY_OR_USE_LOCAL" and not LLM_BASE_URL: logger.warning("LLM_API_KEY is placeholder, LLM_BASE_URL not set, LLM_MANUAL_MODE is False. LLM API calls likely fail.")
 if ENABLE_CORE_CODE_MODIFICATION: logger.warning(f"!!! CAUTION: Core code modification/testing/verification ENABLED. Primary LLM goal is now BOOTSTRAPPING Seed capabilities. Monitor closely. !!!")
+
+# Log the "allow all commands" status
+if VM_SERVICE_USE_REAL and VM_SERVICE_ALLOWED_REAL_COMMANDS == VM_SERVICE_ALLOW_ALL_COMMANDS_MAGIC_VALUE:
+    logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+    logger.critical("!!! DANGER: VM_SERVICE_ALLOWED_REAL_COMMANDS IS SET TO ALLOW ALL COMMANDS. !!!")
+    logger.critical("!!! The AGI has UNRESTRICTED shell access to the real system/container.    !!!")
+    logger.critical("!!! PROCEED WITH EXTREME CAUTION AND IN AN ISOLATED ENVIRONMENT ONLY.        !!!")
+    logger.critical("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+elif VM_SERVICE_USE_REAL:
+    logger.info(f"VM Service Real Mode using command whitelist: {VM_SERVICE_ALLOWED_REAL_COMMANDS}")
+
+
 logger.info(f"Initial Seed Goal: {SEED_INITIAL_GOAL.get('description')}")
 logger.info(f"Operational Prompt Template is initially set from config and can be modified via learning parameters.")
 
