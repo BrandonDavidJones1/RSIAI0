@@ -25,7 +25,7 @@ from typing import Dict, Any, Optional, List, Union, Deque, Tuple, Callable
 # Import config constants (updated for RSIAI Seed)
 # Now using relative import as config.py is in the same package
 from .config import (
-    MEMORY_MAX_EPISODIC_SIZE, MEMORY_MAX_LIFELONG_SIZE, MEMORY_SAVE_FILE,
+    MEMORY_MAX_EPISODIC_SIZE, MEMORY_MAX_LIFELONG_SIZE, MEMORY_SAVE_FILENAME, # Corrected import
     MEMORY_LIFELONG_EVENT_TYPES, MEMORY_LIFELONG_TAGS,
     MEMORY_ENABLE_VECTOR_SEARCH, # Flag to control vector search inclusion (currently False)
     # Conditionally import vector config ONLY if enabled (currently won't import)
@@ -83,7 +83,17 @@ class MemorySystem:
         self.max_lifelong_size: int = cfg.get('max_lifelong_size', MEMORY_MAX_LIFELONG_SIZE)
         self._lifelong_memory: Dict[str, MemoryEntry] = {}
         self._lifelong_keys_by_age: Deque[str] = deque(maxlen=self.max_lifelong_size)
-        self.save_file_path: str = cfg.get('save_file_path', MEMORY_SAVE_FILE)
+
+        # Determine save_file_path: Use from config if provided, else construct default.
+        # The orchestrator is expected to provide an absolute path in cfg['save_file_path'].
+        if 'save_file_path' in cfg and cfg['save_file_path'] is not None:
+            self.save_file_path: str = str(pathlib.Path(cfg['save_file_path']).resolve())
+        else:
+            # Fallback default: In CWD, using MEMORY_SAVE_FILENAME
+            default_save_path = pathlib.Path(".").resolve() / MEMORY_SAVE_FILENAME
+            self.save_file_path: str = str(default_save_path)
+            logger.debug(f"MemorySystem using default save_file_path: {self.save_file_path} (config override not provided/None)")
+
 
         # <<<< Seed Learning State >>>>
         self._learning_params_key = "seed_learning_parameters_state"
@@ -96,7 +106,7 @@ class MemorySystem:
         self.vector_search_enabled: bool = VECTOR_SEARCH_ENABLED_CONFIG and VECTOR_SEARCH_LIBS_AVAILABLE
         self.vector_index: Optional['faiss.Index'] = None
         self.vector_embedding_model: Optional['SentenceTransformer'] = None
-        self.vector_index_path: Optional[str] = None
+        self.vector_index_path: Optional[str] = None # This will be set from cfg if vector search enabled
         self.vector_dimension: Optional[int] = None
         self.vector_id_map: Dict[int, str] = {}
         self._vector_index_dirty_counter: int = 0
@@ -107,7 +117,13 @@ class MemorySystem:
 
         if self.vector_search_enabled:
             logger.info("Vector search enabled in config and libraries found. Initializing...")
-            self.vector_index_path = cfg.get('vector_index_path', MEMORY_VECTOR_DB_PATH)
+            # Determine vector_index_path: Use from config if provided, else construct default.
+            # The orchestrator (for variants) is expected to provide an absolute path.
+            default_vector_db_path_str = None
+            if MEMORY_VECTOR_DB_PATH: # If a base name is configured for the vector DB
+                default_vector_db_path_str = str(pathlib.Path(".").resolve() / MEMORY_VECTOR_DB_PATH)
+
+            self.vector_index_path = cfg.get('vector_index_path', default_vector_db_path_str)
             self.vector_dimension = cfg.get('vector_dimension', MEMORY_VECTOR_DIM)
             self._vector_auto_save_interval = cfg.get('vector_save_interval', MEMORY_VECTOR_AUTO_SAVE_INTERVAL)
 
@@ -482,7 +498,7 @@ class MemorySystem:
     def get_all_lifelong_entries(self, include_internal: bool = False) -> List[MemoryEntry]:
         """ Retrieves all lifelong entries, ordered by age (newest first). Option to include internal state entries. """
         entries = []
-        for key in reversed(self._lifelong_keys_by_age):
+        for key in reversed(list(self._lifelong_keys_by_age)): # Iterate over a copy
              if key in self._lifelong_memory:
                   if include_internal or key not in [self._learning_params_key, self._behavioral_rules_key]:
                        entries.append(self._lifelong_memory[key])
@@ -521,8 +537,6 @@ class MemorySystem:
                     if limit is not None and len(results) >= limit: break
                 except Exception as e: logger.warning(f"Error applying filter function to lifelong entry {key}: {e}")
         return results
-
-    # --- REMOVED Agent Pool State Methods ---
 
     # --- Seed Learning Mechanism Persistence Methods ---
     def load_learning_state(self):

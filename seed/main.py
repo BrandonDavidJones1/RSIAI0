@@ -22,7 +22,7 @@ import argparse # <<< Added for command-line arguments
 
 # Keep TF import if still potentially needed elsewhere (e.g. future internal models)
 import tensorflow as tf
-from typing import Optional, List, Dict, Any, Callable, Tuple
+from typing import Optional, List, Dict, Any, Callable, Tuple, Union
 from collections import deque
 
 # --- Configuration ---
