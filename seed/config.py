@@ -1,3 +1,5 @@
+# --- START OF FILE config.py ---
+
 # --- START OF FILE seed/config.py ---
 
 # RSIAI/seed/config.py
@@ -118,12 +120,15 @@ LLM_DEFAULT_MAX_TOKENS = 2000 # Slightly reduced from 2500 as prompt is shorter
 # --- Memory Config ---
 MEMORY_MAX_EPISODIC_SIZE = 1000
 MEMORY_MAX_LIFELONG_SIZE = 3000
-MEMORY_SAVE_FILE = "seed_bootstrap_memory.pkl"
+# Define base filenames; Main_Orchestrator will prepend base_path if in variant mode
+MEMORY_SAVE_FILENAME = "seed_bootstrap_memory.pkl"
+RESTART_STATE_FILENAME = MEMORY_SAVE_FILENAME.replace(".pkl", "_restart_state.pkl")
+
 
 MEMORY_ENABLE_VECTOR_SEARCH = False
-MEMORY_VECTOR_DB_PATH = None
-MEMORY_VECTOR_DIM = None
-MEMORY_VECTOR_AUTO_SAVE_INTERVAL = None
+MEMORY_VECTOR_DB_PATH = None # Example: "_vector_db/seed_memory_index"
+MEMORY_VECTOR_DIM = None # Example: 384 (for all-MiniLM-L6-v2)
+MEMORY_VECTOR_AUTO_SAVE_INTERVAL = None # Example: 100 (dirty counter threshold)
 
 RESTART_SIGNAL_EVENT_TYPE = "RESTART_REQUESTED_BY_SEED"
 MEMORY_LIFELONG_EVENT_TYPES = {
@@ -141,6 +146,7 @@ MEMORY_LIFELONG_EVENT_TYPES = {
     "seed_learning_parameters_state",
     "seed_behavioral_rules_state",
     "internal_model_vm_predictor_state",
+    "GA_Event", "GA_VariantSpawned", "GA_VariantTerminated", "GA_FitnessUpdate" # GA related events
 }
 MEMORY_LIFELONG_TAGS = {
     "Seed", "Goal", "Config", "Critical", "Evaluation", "Safety", "Memory", "Action",
@@ -150,7 +156,8 @@ MEMORY_LIFELONG_TAGS = {
     "BehavioralRule", "InternalState",
     "Bootstrap", "InternalAnalysis", "InternalHypothesis", "InternalLearning", "InternalPlanning",
     "PromptEdit",
-    "VMMode"
+    "VMMode",
+    "GeneticAlgorithm", "Population", "Variant", "Fitness" # GA related tags
 }
 
 
@@ -216,7 +223,7 @@ SAFE_EXEC_GLOBALS = {
 # --- Core Code Modification Config ---
 ENABLE_CORE_CODE_MODIFICATION = True
 CORE_CODE_MODIFICATION_ALLOWED_DIRS = ["seed"]
-CORE_CODE_MODIFICATION_DISALLOWED_FILES = [ "main.py"]
+CORE_CODE_MODIFICATION_DISALLOWED_FILES = [ "main.py"] # Keep main.py disallowed for single instance direct modification
 CORE_CODE_MODIFICATION_BACKUP_DIR = "_core_backups"
 
 # --- Core Code Testing Config ---
@@ -234,6 +241,17 @@ CORE_CODE_VERIFICATION_SUITES = {
     "internal_analysis": ["pytest", "-k", "internal_analysis", "-v"],
     "internal_learning": ["pytest", "-k", "internal_learning", "-v"],
 }
+
+# --- Genetic Algorithm Mode (Darwinian Gödel Machine) ---
+ENABLE_DARWINIAN_MODE = False  # <<<< NEW: Set to True to enable GA mode
+GA_POPULATION_SIZE = 5         # <<<< NEW: Number of concurrent variants
+GA_MAX_GENERATIONS = 10        # <<<< NEW: Number of generations to run
+GA_VARIANTS_BASE_DIR = "_ga_variants" # <<<< NEW: Directory to store variant codebases and data
+GA_MUTATION_PROBABILITY = 0.1    # <<<< NEW: Probability of applying mutation to an offspring
+GA_CROSSOVER_PROBABILITY = 0.7   # <<<< NEW: Probability of applying crossover
+# Base Seed project dir (relative to where main.py is run from, typically project root)
+# Used by GA_Orchestrator to copy the initial codebase for variants.
+GA_SEED_PROJECT_SOURCE_DIR = "."
 
 
 # --- Validation Checks ---
@@ -304,6 +322,18 @@ if MEMORY_ENABLE_VECTOR_SEARCH:
     if not MEMORY_VECTOR_DIM: validation_errors.append("MEMORY_ENABLE_VECTOR_SEARCH is True but MEMORY_VECTOR_DIM is not set.")
     if not MEMORY_VECTOR_AUTO_SAVE_INTERVAL: validation_errors.append("MEMORY_ENABLE_VECTOR_SEARCH is True but MEMORY_VECTOR_AUTO_SAVE_INTERVAL is not set.")
 
+if ENABLE_DARWINIAN_MODE:
+    if not isinstance(GA_POPULATION_SIZE, int) or GA_POPULATION_SIZE <= 0:
+        validation_errors.append("GA_POPULATION_SIZE must be a positive integer.")
+    if not isinstance(GA_MAX_GENERATIONS, int) or GA_MAX_GENERATIONS <= 0:
+        validation_errors.append("GA_MAX_GENERATIONS must be a positive integer.")
+    if not GA_VARIANTS_BASE_DIR or not isinstance(GA_VARIANTS_BASE_DIR, str):
+        validation_errors.append("GA_VARIANTS_BASE_DIR must be a non-empty string.")
+    if not isinstance(GA_MUTATION_PROBABILITY, float) or not (0.0 <= GA_MUTATION_PROBABILITY <= 1.0):
+        validation_errors.append("GA_MUTATION_PROBABILITY must be a float between 0.0 and 1.0.")
+    if not isinstance(GA_CROSSOVER_PROBABILITY, float) or not (0.0 <= GA_CROSSOVER_PROBABILITY <= 1.0):
+        validation_errors.append("GA_CROSSOVER_PROBABILITY must be a float between 0.0 and 1.0.")
+
 
 # --- Final Error Check ---
 if validation_errors:
@@ -315,6 +345,8 @@ logger.info("RSIAI Seed Configuration Loaded and Validated (Bootstrap Intelligen
 if SEED_ENABLE_RUNTIME_CODE_EXECUTION and SEED_CODE_EXECUTION_SANDBOX_LEVEL < 2: logger.warning("!!! SECURITY WARNING: Runtime code exec enabled with Sandboxing Level < 2. AST Validation (Level 2) STRONGLY recommended. !!!")
 if not LLM_MANUAL_MODE and LLM_API_KEY == "YOUR_API_KEY_OR_USE_LOCAL" and not LLM_BASE_URL: logger.warning("LLM_API_KEY is placeholder, LLM_BASE_URL not set, LLM_MANUAL_MODE is False. LLM API calls likely fail.")
 if ENABLE_CORE_CODE_MODIFICATION: logger.warning(f"!!! CAUTION: Core code modification/testing/verification ENABLED. Primary LLM goal is now BOOTSTRAPPING Seed capabilities. Monitor closely. !!!")
+if ENABLE_DARWINIAN_MODE: logger.critical("!!! DARWINIAN (GA) MODE IS ENABLED. This is highly experimental and resource-intensive. Monitor closely. !!!")
+
 
 # Log the "allow all commands" status
 if VM_SERVICE_USE_REAL and VM_SERVICE_ALLOWED_REAL_COMMANDS == VM_SERVICE_ALLOW_ALL_COMMANDS_MAGIC_VALUE:

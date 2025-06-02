@@ -1,5 +1,11 @@
 # RSIAI0-Seed: Recursive Self-Improving AI Seed
 
+This is an LLM based "Darwin Godel Machine"
+Its operational and has full permissions by default.
+By default only a single run takes place for a set 
+number of iterations. Funtionality exists to turn on
+genetic tree functionality. Use with extreme caution.
+
 This project implements RSIAI0-Seed, an experimental Artificial Intelligence system designed to explore Recursive Self-Improvement (RSI). The core concept is a "Seed" AGI that, guided initially by an external Language Model (LLM) acting as a bootstrapper, aims to develop its own capabilities by analyzing its performance, modifying its own source code, testing those modifications, and verifying their safety and efficacy before applying them.
 
 The ultimate goal is for the Seed to bootstrap its own intelligence, progressively enhancing its internal analysis, planning, learning, and reasoning functions to become more autonomous and capable over time.
@@ -7,8 +13,6 @@ The ultimate goal is for the Seed to bootstrap its own intelligence, progressive
 ---
 
 ## ☢️ WARNINGS ☢️
-
-EXPECT BREAKING CHANGES
 
 This software is highly experimental research code exploring advanced AI concepts, including potentially Strong Recursive Self-Improvement (where the AI modifies its core learning and reasoning algorithms). It carries significant risks and should be handled with extreme caution. 
 
