@@ -2,12 +2,9 @@
 
 **An Experimental LLM-based "Darwinian Gödel Machine" for Exploring Recursive Self-Improvement.**
 
-RSIAI0-Seed is an open-source project designed to explore Artificial General Intelligence (AGI) through Recursive Self-Improvement (RSI). The core is a "Seed" AI that, initially guided by an external Language Model (LLM), aims to autonomously enhance its own capabilities. It achieves this by analyzing its performance, strategically modifying its own source code, rigorously testing those modifications, and verifying their safety and efficacy before live application.
+RSIAI0-Seed is an open-source project designed to explore Artificial General Intelligence (AGI) through Recursive Self-Improvement (RSI). The core is a "Seed" AI that, initially guided by an external Language Model (LLM), aims to autonomously enhance its own capabilities. It achieves this by analyzing its performance, strategically modifying its scaffolding, testing those modifications, and verifying their efficacy before live application.
 
-The ultimate vision is for the Seed to bootstrap its intelligence, progressively refining its internal analysis, planning, learning, and reasoning functions to become increasingly autonomous and capable, potentially leading to Strong RSI where core learning algorithms are themselves improved.
-
-**This project is operational. By default, it is configured with capabilities that grant it significant autonomy, including the ability to execute arbitrary commands on the host system if `VM_SERVICE_USE_REAL` is `True` and `VM_SERVICE_ALLOWED_REAL_COMMANDS` is set to permit this (which it is by default via `VM_SERVICE_ALLOW_ALL_COMMANDS_MAGIC_VALUE`).**
-
+The vision is for the Seed to bootstrap its intelligence, progressively refining its internal analysis, planning, learning, and reasoning functions to become increasingly autonomous and capable.
 ---
 
 ## ☢️ DANGER: EXTREME CAUTION REQUIRED ☢️
